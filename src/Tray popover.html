@@ -1,0 +1,1123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Time Tracker · Tray popover</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<style>
+  /* ---------- Time Tracker v0.3 — popover surface (parity with recorded-time / export tokens) ---------- */
+  * { box-sizing: border-box; }
+  /* Transparent root + body: the native popover window is transparent, so only
+     the card (+ its drop shadow) paints — everything else is the desktop. (In
+     the browser prototype the page just shows on the browser's own background.) */
+  html { margin: 0; padding: 0; height: 100%; background: transparent; }
+  body { margin: 0; padding: 0; background: transparent; }
+  :root {
+    --paper:#F2F3F1; --paper-2:#ECEEEC; --panel:#FFFFFF;
+    --ink:#14171A; --ink-2:#3C434B; --ink-3:#6A727C; --ink-4:#9097A0; --ink-5:#BFC5CA;
+    --rule:#E1E4E6; --rule-2:#D2D7DB; --rule-strong:#BFC5CA;
+    --signal:#1361FF; --signal-soft:#DCE8FF; --signal-ink:#0A3FA8;
+    --brand-a:#6366F1; --brand-b:#3730A3;
+    --good:#1E8A52; --warn:#B45309; --bad:#C0392B;
+    --sans:-apple-system, BlinkMacSystemFont, "Segoe UI","SF Pro Text", system-ui, "Helvetica Neue", Arial, sans-serif;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  body {
+    font-family: var(--sans); color: var(--ink); background: transparent;
+    font-size: 13.5px; line-height: 1.45; -webkit-font-smoothing: antialiased;
+    font-feature-settings: "tnum";
+    display: flex; align-items: flex-start; justify-content: center;
+    /* The window is transparent and hugs the card: a thin frame on each side
+       (just enough for the drop shadow + the bottom pointer to fade into the
+       desktop) and the page reports its real height to the native shell over
+       the `resize:` IPC so the window matches the card — no margin to speak of.
+       No `min-height` — body == content. */
+    padding: 6px 12px 18px;
+  }
+  .pv-mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .pv-lbl  { font-family: var(--mono); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); }
+
+  /* key caps */
+  .pv-key { display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; padding:0 5px;
+    background: linear-gradient(180deg,#FAFBFC,#EEF0F2); border:1px solid var(--rule-2); border-bottom-color: var(--rule-strong);
+    border-radius:3.5px; font-family:var(--mono); font-size:10.5px; color:var(--ink-2); font-weight:500; }
+  .pv-key.dim { background:var(--paper); color:var(--ink-4); }
+  .pv-combo { display:inline-flex; gap:3px; vertical-align:middle; }
+
+  /* brand mark — indigo gradient + db */
+  .pv-mark { border-radius:7px; display:inline-grid; place-items:center; flex:0 0 auto;
+    background: linear-gradient(135deg, var(--brand-a), var(--brand-b)); color:#fff; font-weight:800;
+    font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif; }
+
+  /* ---------- popover shell ---------- */
+  .pv { position:relative; width:360px; }
+  .pv-card { background:var(--panel); border-radius:12px; overflow:hidden;
+    /* tight shadow — the window hugs the card, so the soft glow can't be 60px tall or it clips */
+    box-shadow: 0 1px 0 rgba(20,23,26,.05), 0 6px 16px -6px rgba(20,23,26,.26), 0 0 0 1px rgba(20,23,26,.07); }
+  .pv-chrome { display:flex; align-items:center; gap:9px; padding:8px 12px; border-bottom:1px solid var(--rule);
+    background: linear-gradient(180deg,#FCFDFD,#F5F6F5); }
+  .pv-chrome .pv-mark { width:14px; height:14px; font-size:8px; }
+  .pv-chrome .sp { flex:1; }
+  .pv-conn { display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:10px; letter-spacing:.06em; color:var(--ink-4); }
+  .pv-conn .d { width:6px; height:6px; border-radius:50%; background:var(--good); box-shadow:0 0 0 2px rgba(30,138,82,.16); }
+  .pv-conn[data-state="off"] .d { background:var(--warn); box-shadow:0 0 0 2px rgba(180,83,9,.18); animation: pv-blink 1s ease-in-out infinite; }
+  .pv-conn[data-state="off"] { color:var(--warn); }
+
+  /* ---------- top zone: running / idle ---------- */
+  .pv-head { padding:16px 18px 14px; }
+  .pv-head-tag { display:flex; align-items:center; gap:9px; margin-bottom:8px; }
+  .pv-dot-run { width:7px; height:7px; border-radius:50%; background:var(--signal); box-shadow:0 0 0 4px rgba(19,97,255,.15); animation: pv-pulse 1.6s ease-in-out infinite; }
+  .pv-dot-idle { width:7px; height:7px; border-radius:50%; border:1.25px solid var(--ink-4); background:transparent; }
+  .pv-timer { font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:42px; color:var(--ink); font-weight:500;
+    letter-spacing:-.025em; line-height:1; display:block; }
+  .pv-timer .c { color:var(--ink-4); }
+  .pv-timer .c.tick { animation: pv-caret 1s steps(2) infinite; }
+  .pv-timer.idle { font-size:28px; color:var(--ink-4); }
+  .pv-eng { margin-top:8px; font-size:14px; color:var(--ink); font-weight:500; letter-spacing:-.008em; }
+  .pv-note { margin-top:4px; color:var(--ink-2); font-size:12.5px; line-height:1.4; }
+  .pv-started { margin-top:8px; font-family:var(--mono); font-size:10.5px; color:var(--ink-4); letter-spacing:.04em; }
+  .pv-started b { color:var(--ink-3); font-weight:400; }
+  .pv-idle-hint { margin-top:10px; color:var(--ink-3); font-size:12.5px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+
+  /* ---------- middle zone: switcher ---------- */
+  .pv-switch { border-top:1px solid var(--rule); background:var(--panel); }
+  .pv-switch-head { display:flex; align-items:baseline; padding:10px 14px 6px; }
+  .pv-switch-head .sp { flex:1; }
+  .pv-switch-head .keys { font-size:10.5px; color:var(--ink-4); font-family:var(--mono); letter-spacing:.04em; display:inline-flex; align-items:center; gap:4px; }
+  /* cap the switcher so a big registry can't push the card past the popover
+     window — the rest scrolls; "View all in Recorded Time" is the overflow valve */
+  .pv-rows { max-height:240px; overflow-y:auto; overscroll-behavior:contain; }
+  .pv-rows::-webkit-scrollbar { width:8px; }
+  .pv-rows::-webkit-scrollbar-thumb { background:var(--rule-2); border-radius:4px; border:2px solid var(--panel); }
+  .pv-rows::-webkit-scrollbar-thumb:hover { background:var(--rule-strong); }
+  .pv-row { display:grid; grid-template-columns:14px 1fr auto; align-items:center; gap:10px; padding:8px 14px 8px 11px;
+    border-top:1px solid var(--rule); position:relative; cursor:pointer; }
+  .pv-rows > .pv-row:first-child { border-top:0; }
+  .pv-row.selected { background:var(--signal-soft); box-shadow: inset 2px 0 0 var(--signal); }
+  .pv-row .gutter { display:flex; align-items:center; justify-content:center; }
+  .pv-row .gutter .d { width:6px; height:6px; border-radius:50%; background:var(--signal); box-shadow:0 0 0 3px rgba(19,97,255,.14); animation: pv-pulse 1.6s ease-in-out infinite; }
+  .pv-row .gutter svg { display:block; }
+  .pv-row .body { min-width:0; }
+  .pv-row .cl { font-size:13.5px; color:var(--ink); font-weight:500; letter-spacing:-.005em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pv-row.selected .cl, .pv-row.running .cl { font-weight:600; }
+  .pv-row .en { margin-top:1px; font-family:var(--mono); font-size:10.5px; color:var(--ink-3); letter-spacing:.10em; text-transform:uppercase; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pv-row .en .int { color:var(--ink-4); }
+  .pv-row .rc { font-family:var(--mono); font-size:10.5px; color:var(--ink-4); letter-spacing:.04em; text-align:right; white-space:nowrap; }
+  .pv-row.running .rc { color:var(--signal-ink); }
+  .pv-switch-foot { padding:8px 14px 10px; border-top:1px solid var(--rule); font-size:12px; color:var(--ink-3); }
+  .pv-link { color:var(--signal-ink); cursor:pointer; text-decoration:underline; text-underline-offset:3px; text-decoration-color:rgba(19,97,255,.25); background:none; border:0; padding:0; font:inherit; }
+  .pv-link:hover { text-decoration-color:var(--signal); }
+
+  /* ---------- empty panels ---------- */
+  .pv-empty { border-top:1px solid var(--rule); padding:22px 18px 18px; text-align:center; }
+  .pv-empty .h { font-size:13.5px; color:var(--ink); font-weight:500; letter-spacing:-.005em; }
+  .pv-empty .p { margin-top:6px; color:var(--ink-3); font-size:12.5px; line-height:1.55; }
+  .pv-empty .meta { margin-top:12px; font-family:var(--mono); font-size:10.5px; color:var(--ink-4); letter-spacing:.06em; }
+
+  /* ---------- bottom zone: action bar ---------- */
+  .pv-actions { border-top:1px solid var(--rule); background: linear-gradient(180deg,#FBFCFC,#F6F7F6); padding:10px 14px;
+    display:flex; align-items:center; gap:8px; }
+  .pv-btn { display:inline-flex; align-items:center; gap:8px; background:var(--panel); border:1px solid var(--rule-2); border-radius:7px;
+    padding:5px 10px 5px 7px; font-size:12px; color:var(--ink-2); cursor:pointer; font-family:var(--sans); }
+  .pv-btn:hover { border-color:var(--rule-strong); }
+  .pv-btn.ink { background:var(--ink); color:#fff; border-color:var(--ink); font-weight:500; padding:7px 12px;
+    box-shadow:0 1px 0 rgba(0,0,0,.06), 0 6px 14px -6px rgba(20,23,26,.4); }
+  .pv-btn.ghost { background:transparent; border-color:transparent; color:var(--ink-3); }
+  .pv-btn.ghost:hover { background:var(--paper-2); }
+  .pv-actions .sp { flex:1; }
+
+  /* ---------- add-workstream form ---------- */
+  .pv-add { border-top:1px solid rgba(19,97,255,.33); background:#F7FAFF; box-shadow: inset 3px 0 0 var(--signal); padding:12px 16px 4px; }
+  .pv-add-head { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .pv-add-head .sp { flex:1; }
+  .pv-add-head .next { font-family:var(--mono); font-size:10.5px; color:var(--ink-4); }
+  .pv-field { display:grid; grid-template-columns:84px 1fr; gap:10px; align-items:center; padding:6px 0; position:relative; }
+  .pv-field .lab { } /* uses .pv-lbl */
+  .pv-field .lab.dim .pv-lbl, .pv-field .lab.dim { color:var(--ink-4); }
+  .pv-field .ctl { position:relative; }
+  .pv-field .box { display:flex; align-items:center; background:var(--panel); border:1.5px solid var(--rule-2); border-radius:6px;
+    padding:6px 10px; min-height:28px; }
+  .pv-field .box.focus { border-color:var(--signal); box-shadow:0 0 0 3px rgba(19,97,255,.12); }
+  .pv-field .box.disabled { background:var(--paper); }
+  .pv-field .box input { flex:1; min-width:0; border:0; outline:0; background:transparent; font:inherit; font-size:13px; color:var(--ink); }
+  .pv-field .box input::placeholder { color:var(--ink-4); }
+  .pv-field .box .ca { color:var(--ink-3); display:block; }
+  .pv-field .box.disabled input { color:var(--ink-4); }
+  .pv-fdrop { position:absolute; top:calc(100% + 4px); left:0; right:0; background:var(--panel); border:1px solid var(--rule);
+    border-radius:8px; box-shadow:0 12px 28px -10px rgba(20,23,26,.22), 0 0 0 1px rgba(20,23,26,.04); overflow:hidden; z-index:5; font-size:13px; }
+  .pv-fdrop .it { padding:7px 11px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--rule); cursor:pointer; color:var(--ink); }
+  .pv-fdrop .it:first-child { border-top:0; }
+  .pv-fdrop .it:hover, .pv-fdrop .it.active { background:var(--signal-soft); }
+  .pv-fdrop .it .nm { flex:1; }
+  .pv-fdrop .it.muted { color:var(--ink-3); }
+  .pv-fdrop .it .rt { font-family:var(--mono); font-size:10.5px; color:var(--ink-4); }
+  .pv-fdrop .new { padding:8px 11px; border-top:1px solid var(--rule); background:var(--paper); color:var(--ink-3); font-size:12.5px;
+    display:flex; align-items:center; gap:6px; cursor:pointer; }
+  .pv-bill-toggle { display:inline-flex; align-items:center; gap:8px; cursor:pointer; user-select:none; }
+  .pv-bill-sw { position:relative; width:28px; height:16px; border-radius:999px; background:var(--rule-2); flex:0 0 auto; transition:background .15s; }
+  .pv-bill-sw::after { content:""; position:absolute; top:1px; left:1px; width:14px; height:14px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.18); transition:left .15s; }
+  .pv-bill-toggle.on .pv-bill-sw { background:var(--signal); }
+  .pv-bill-toggle.on .pv-bill-sw::after { left:13px; }
+  .pv-add-actions { display:flex; gap:6px; padding:10px 0 8px; border-top:1px solid rgba(19,97,255,.13); margin-top:4px; }
+
+  /* ---------- switch toast ---------- */
+  /* transient (~1s) "switched · dismissing" pill — sits over the chrome row's
+     right side rather than floating above the card, so the window stays snug */
+  .pv-toast { position:absolute; top:7px; right:8px; z-index:6; display:inline-flex; align-items:center; gap:7px; padding:5px 10px;
+    background:var(--signal); color:#fff; border-radius:999px; font-family:var(--mono); font-size:10.5px; letter-spacing:.04em;
+    box-shadow:0 6px 16px -6px rgba(19,97,255,.5); }
+  .pv-toast .d { width:6px; height:6px; border-radius:50%; background:#fff; }
+
+  /* ---------- hotkey reference card (?ref) ---------- */
+  .pv-ref { width:auto; max-width:760px; }
+  .pv-ref h1 { margin:6px 0 8px; font-size:28px; font-weight:600; letter-spacing:-.02em; color:var(--ink); }
+  .pv-ref .lede { color:var(--ink-3); font-size:14px; line-height:1.55; max-width:580px; }
+  .pv-ref .lede .pv-mono { color:var(--ink-2); }
+  .pv-ref-grid { margin-top:28px; display:grid; grid-template-columns:1fr 1fr; background:var(--panel); border:1px solid var(--rule);
+    border-radius:10px; box-shadow:0 1px 0 rgba(20,23,26,.03), 0 1px 2px rgba(20,23,26,.04); overflow:hidden; }
+  .pv-ref-cell { padding:16px 22px; border-top:1px solid var(--rule); }
+  .pv-ref-cell:nth-child(1), .pv-ref-cell:nth-child(2) { border-top:0; }
+  .pv-ref-cell:nth-child(even) { border-left:1px solid var(--rule); }
+  .pv-ref-cell.dim { opacity:.82; }
+  .pv-ref-cell .verb { margin-top:10px; font-size:15px; font-weight:500; color:var(--ink); letter-spacing:-.008em; }
+  .pv-ref-cell .sub { margin-top:2px; font-size:12px; color:var(--ink-3); }
+
+  /* ---------- tab strip: Workstreams | Today (v0.3) ---------- */
+  .pv-tabs { display:flex; align-items:stretch; border-top:1px solid var(--rule); border-bottom:1px solid var(--rule);
+    background:var(--panel); padding-left:4px; }
+  .pv-tab { position:relative; padding:11px 14px 10px; cursor:pointer; display:inline-flex; align-items:baseline; gap:6px;
+    background:none; border:0; font:inherit; }
+  .pv-tab .t { font-size:13.5px; color:var(--ink-3); font-weight:500; letter-spacing:-.005em; }
+  .pv-tab .m { font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:11px; color:var(--ink-4); letter-spacing:.02em; }
+  .pv-tab:hover .t { color:var(--ink-2); }
+  .pv-tab.on .t { color:var(--ink); font-weight:600; }
+  .pv-tab.on .m { color:var(--ink-2); }
+  .pv-tab.on::after { content:""; position:absolute; left:12px; right:12px; bottom:-1px; height:2px; background:var(--signal); border-radius:1px; }
+  .pv-tabs .sp { flex:1; }
+  .pv-tabs .arrows { display:inline-flex; align-items:center; gap:6px; padding:0 12px; }
+
+  /* ---------- today: roll-up counters ---------- */
+  .pv-counters { display:grid; grid-template-columns:repeat(4,1fr); background:var(--panel); }
+  .pv-counter { padding:10px 12px 12px; border-left:1px solid var(--rule); }
+  .pv-counter:first-child { border-left:0; }
+  .pv-counter .k { font-family:var(--mono); font-size:9.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-4); }
+  .pv-counter .v { margin-top:4px; font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:14.5px; font-weight:500; color:var(--ink); letter-spacing:-.005em; }
+  .pv-counter.bill .v { color:var(--signal-ink); }
+
+  /* ---------- today: day timeline ---------- */
+  .pv-timeline { padding:4px 14px 12px; background:var(--panel); border-top:1px solid var(--rule); }
+  .pv-timeline.bare { border-top:0; }
+  .pv-tl-track { position:relative; height:16px; background:var(--paper-2); border:1px solid var(--rule); border-radius:4px; overflow:hidden; }
+  .pv-tl-blk { position:absolute; top:0; bottom:0; }
+  .pv-tl-blk.nb { background-image:repeating-linear-gradient(135deg, rgba(255,255,255,.55) 0 2px, transparent 2px 5px); opacity:.55; }
+  .pv-tl-blk.run { box-shadow:inset 0 0 0 1.5px var(--signal); animation: pv-tlrun 1.6s ease-in-out infinite; }
+  .pv-tl-now { position:absolute; top:-2px; bottom:-2px; width:1.5px; background:var(--ink); }
+  .pv-tl-nowdot { position:absolute; top:-3px; width:6px; height:6px; border-radius:50%; background:var(--ink); border:1.5px solid var(--panel); box-sizing:content-box; transform:translateX(-3px); }
+  .pv-tl-axis { position:relative; margin-top:5px; height:12px; }
+  .pv-tl-tick { position:absolute; transform:translateX(-50%); font-family:var(--mono); font-size:9.5px; color:var(--ink-4); letter-spacing:.02em; white-space:nowrap; }
+  .pv-tl-tick.now { color:var(--ink); font-weight:600; }
+
+  /* ---------- today: entry rows ---------- */
+  .pv-today { background:var(--panel); border-top:1px solid var(--rule); max-height:248px; overflow-y:auto; overscroll-behavior:contain; }
+  .pv-today::-webkit-scrollbar { width:8px; }
+  .pv-today::-webkit-scrollbar-thumb { background:var(--rule-2); border-radius:4px; border:2px solid var(--panel); }
+  .pv-today::-webkit-scrollbar-thumb:hover { background:var(--rule-strong); }
+  .pv-trow { position:relative; padding:9px 14px 9px 12px; border-top:1px solid var(--rule); }
+  .pv-today > .pv-trow:first-child { border-top:0; }
+  .pv-trow.run { background:#F4F8FF; box-shadow:inset 2px 0 0 var(--signal); }
+  .pv-trow:not(.run):hover { background:var(--paper-2); }
+  .pv-trow .l1 { display:grid; grid-template-columns:14px 96px 1fr auto; align-items:center; gap:8px; }
+  .pv-trow .l2 { display:grid; grid-template-columns:14px 96px 1fr; align-items:baseline; gap:8px; margin-top:2px; }
+  .pv-trow .pip { display:flex; align-items:center; justify-content:center; }
+  .pv-trow .pip .d { width:7px; height:7px; border-radius:50%; }
+  .pv-trow .pip .d.run { background:var(--signal); box-shadow:0 0 0 4px rgba(19,97,255,.15); animation:pv-pulse 1.6s ease-in-out infinite; }
+  .pv-trow .pip .d.nb { background:transparent; border:1.25px solid var(--ink-4); }
+  .pv-trow .rng { font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:11.5px; color:var(--ink-3); letter-spacing:.01em; white-space:nowrap; }
+  .pv-trow .rng .dash { color:var(--ink-4); }
+  .pv-trow.run .rng { color:var(--signal-ink); font-weight:500; }
+  .pv-trow .cl { font-size:13px; color:var(--ink); font-weight:500; letter-spacing:-.005em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .pv-trow.run .cl { font-weight:600; }
+  .pv-trow .cl.nb { color:var(--ink-3); }
+  .pv-trow .dur { font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:12.5px; color:var(--ink); font-weight:500; letter-spacing:-.005em; white-space:nowrap; text-align:right; }
+  .pv-trow.run .dur { color:var(--signal-ink); font-weight:600; }
+  .pv-trow .dur.nb { color:var(--ink-3); }
+  .pv-trow .dur .tk { display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--signal); margin-left:6px; vertical-align:middle; animation:pv-pulse 1.6s ease-in-out infinite; }
+  .pv-trow .meta { font-family:var(--mono); font-size:10px; color:var(--ink-3); letter-spacing:.10em; text-transform:uppercase; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pv-trow .meta .eng { color:var(--ink-2); }
+  .pv-trow .meta .eng.nb { color:var(--ink-4); }
+  .pv-trow .meta .nb { color:var(--ink-4); }
+  .pv-trow .meta .ds { color:var(--ink-4); text-transform:none; letter-spacing:.01em; font-size:11px; }
+  .pv-trow .edit { position:absolute; top:8px; right:10px; width:22px; height:22px; padding:0; background:var(--panel); border:1px solid var(--rule-2);
+    border-radius:5px; color:var(--ink-3); cursor:pointer; display:grid; place-items:center; opacity:0; pointer-events:none; transition:opacity .1s; }
+  .pv-trow:not(.run):hover .edit { opacity:1; pointer-events:auto; }
+  .pv-trow .edit:hover { border-color:var(--rule-strong); color:var(--ink-2); }
+  .pv-today-empty { border-top:1px solid var(--rule); padding:32px 18px 38px; text-align:center; background:var(--panel); }
+  .pv-today-empty .h { font-size:13.5px; color:var(--ink); font-weight:500; letter-spacing:-.005em; }
+  .pv-today-empty .p { margin-top:6px; color:var(--ink-3); font-size:12.5px; line-height:1.55; display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:center; }
+
+  @keyframes pv-pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.04)} }
+  @keyframes pv-tlrun { 0%,100%{box-shadow:inset 0 0 0 1.5px var(--signal)} 50%{box-shadow:inset 0 0 0 1.5px rgba(19,97,255,.4)} }
+  @keyframes pv-caret { 0%,49%{opacity:1} 50%,100%{opacity:0} }
+  @keyframes pv-blink { 0%,100%{opacity:1} 50%{opacity:.4} }
+  @keyframes pv-pop { from{opacity:0; transform:translateY(8px) scale(.985)} to{opacity:1; transform:none} }
+  .pv.enter { animation: pv-pop 240ms cubic-bezier(.16,.84,.32,1); }
+  @media (prefers-reduced-motion: reduce) { *,*::before,*::after{animation-duration:.001s !important; transition-duration:.001s !important} }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+(() => {
+'use strict';
+
+/* =====================================================================
+ * Time Tracker · Tray popover (v0.3)
+ *
+ * The primary daily surface — promoted from glance-and-dismiss to the
+ * thing most users live in. Summoned with Ctrl+Shift+/ from anywhere;
+ * vertical zones: state header · tab strip (Workstreams | Today) ·
+ * the active list · action bar.
+ *
+ * v0.3 adds the Today tab — a second job for the popover: glance the
+ * day so far (roll-up counters, a 9a–6p timeline, the entry list) without
+ * leaving the tray. ←/→ switch tabs; the header + action bar stay put.
+ *
+ * Self-contained: vanilla JS, no build, no CDN — same pattern as the
+ * other app surfaces. In the shipping app this HTML is loaded into a
+ * small undecorated webview anchored to the tray icon; until that window
+ * exists it's served at /popover for review (and stays in sync with the
+ * real app over the same /ws channel the dashboard used).
+ *
+ * Interactive: Tab / Shift+Tab cycles the switcher, Enter switches the
+ * running timer to the selection (1s auto-dismiss countdown), Ctrl+Shift+H
+ * opens the add-workstream form (client type-ahead → engagement → billable
+ * → "Add and start timer" / "Add only" / Cancel), Ctrl+Shift+; starts /
+ * Ctrl+Shift+' stops the timer, Esc backs out. WS events (timer_started /
+ * timer_stopped / entry_logged / hotkey / workstream_added) keep it synced
+ * if the desktop hotkeys fire.
+ *
+ * Server-wired: GET /workstreams seeds the switcher; POST /workstreams adds
+ * one (the add-form submit). Falls back to seed data if those routes 404
+ * (older server / pure-prototype). ?add=1 opens the add form on load — that
+ * is how the desktop Ctrl+Shift+H launches the popover from a closed state.
+ * URL knobs: ?state=first-run | no-active for the empty panels, ?ref for
+ * the hotkey reference card, ?tab=today to open straight on the Today tab.
+ *
+ * Today data: seeded from a mock day log; GET /today (JSON) replaces it
+ * when the server exposes it (falls back to the seed if that route 404s —
+ * wire point in live_view.rs is today's entries, e.g. /recorded?day=today).
+ * ===================================================================== */
+
+const $root = () => document.getElementById('root');
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+  { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+const pad2 = (n) => String(n).padStart(2,'0');
+const qp = () => new URLSearchParams(location.search);
+
+function combo(keys, dim) {
+  return `<span class="pv-combo">${keys.map(k => `<span class="pv-key${dim?' dim':''}">${esc(k)}</span>`).join('')}</span>`;
+}
+function brandMark(size, fs) {
+  return `<span class="pv-mark" style="width:${size}px;height:${size}px;font-size:${fs}px" aria-hidden="true">db</span>`;
+}
+
+/* ---------- mock workstream registry ---------- */
+const SEED_WORKSTREAMS = [
+  { client:'Halden & Roe',     engagement:'Q1 Review',  billable:true,  pinned:false, lastUsed:'now' },
+  { client:'Halden & Roe',     engagement:'Audit',      billable:true,  pinned:true,  lastUsed:'yesterday' },
+  { client:'Kuiper Logistics', engagement:'Month-end',  billable:true,  pinned:true,  lastUsed:'Mon' },
+  { client:'Wren & Cabot',     engagement:'Year-end',   billable:true,  pinned:false, lastUsed:'2d ago' },
+  { client:'Internal',         engagement:'Admin',      billable:false, pinned:false, lastUsed:'today' },
+  { client:'Mott & Geist',     engagement:'Tax prep',   billable:true,  pinned:false, lastUsed:'5d ago' },
+  { client:'Internal',         engagement:'Marketing',  billable:false, pinned:false, lastUsed:'Apr 24' },
+];
+const SEED_NOTE = 'Reviewing receivables aging schedule and tying out the trial balance.';
+
+/* ---------- mock "today" day-log (wire to /recorded?day=today via /today) ----------
+ * startMin / endMin are minutes-since-midnight (drive the timeline + roll-up);
+ * the running entry's end is "now" and its endMin == nowMin. */
+const SEED_TODAY = {
+  nowMin: 14*60 + 51,   // 2:51 PM
+  entries: [
+    { start:'9:08a',  end:'9:54a',  startMin: 9*60+8,   endMin: 9*60+54,  client:'Halden & Roe',     engagement:'Q1 Review', billable:true,  desc:'Reconciled cash, tied out AR aging.' },
+    { start:'9:54a',  end:'10:08a', startMin: 9*60+54,  endMin:10*60+8,   client:'Internal',         engagement:'Break',     billable:false, desc:null },
+    { start:'10:08a', end:'11:35a', startMin:10*60+8,   endMin:11*60+35,  client:'Halden & Roe',     engagement:'Audit',     billable:true,  desc:'Reviewed Q4 workpapers; flagged 3 items for partner.' },
+    { start:'11:35a', end:'12:30p', startMin:11*60+35,  endMin:12*60+30,  client:'Kuiper Logistics', engagement:'Month-end', billable:true,  desc:'Cleared backlog of bank rec exceptions.' },
+    { start:'12:30p', end:'1:42p',  startMin:12*60+30,  endMin:13*60+42,  client:'Internal',         engagement:'Lunch',     billable:false, desc:null },
+    { start:'1:42p',  end:'now',    startMin:13*60+42,  endMin:14*60+51,  client:'Halden & Roe',     engagement:'Q1 Review', billable:true,  desc:'Receivables aging, tying out the trial balance.', running:true },
+  ],
+};
+
+/* ---------- state ---------- */
+const S = {
+  // 'idle' | 'running' | 'adding'   (adding overlays whichever of idle/running we came from)
+  base: 'running',            // the underlying state when not 'adding'
+  adding: false,
+  list: SEED_WORKSTREAMS.map(w => ({ ...w })),
+  runningIdx: 0,              // index of the running workstream (when base==='running'); else -1
+  selectedIdx: 0,             // highlighted row in the switcher
+  timerStart: Date.now() - 69 * 60 * 1000,  // running for 1:09:00 by default
+  note: SEED_NOTE,
+  addStage: 'client',         // 'client' | 'engagement' | 'billable'
+  addClient: '', addEngagement: '', addBillable: true,
+  addBusy: false,             // POST /workstreams in flight
+  openedFromClosed: false,    // popover was opened by Ctrl+Shift+H from a closed state → Esc closes it
+  switchToast: null,          // { secs, timer, fromEng }
+  connected: false,
+  haveServer: false,          // GET /workstreams succeeded → POST is live
+  emptyMode: null,            // null | 'first-run' | 'no-active'
+  tab: 'workstreams',         // 'workstreams' | 'today' — which middle-zone list is showing
+  today: { nowMin: SEED_TODAY.nowMin, entries: SEED_TODAY.entries.map(e => ({ ...e })) },
+};
+let tickHandle = null;
+
+function emptyMode() { const v = qp().get('state'); return v === 'first-run' || v === 'no-active' ? v : null; }
+
+/* relative-time recency string for a workstream that isn't the running one */
+function recency(w, i) { return w.lastUsed || '—'; }
+
+/* ISO → short relative label ("now" / "12m ago" / "3h ago" / "2d ago" / "Apr 24") */
+function relTime(iso) {
+  const t = Date.parse(iso || ''); if (!Number.isFinite(t)) return '—';
+  const s = Math.floor((Date.now() - t) / 1000);
+  if (s < 90) return 'now';
+  if (s < 3600) return `${Math.floor(s/60)}m ago`;
+  if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+  if (s < 7*86400) return `${Math.floor(s/86400)}d ago`;
+  return new Date(t).toLocaleDateString(undefined, { month:'short', day:'numeric' });
+}
+
+/* ---------- "today" helpers ---------- */
+function nowMinutes() { const d = new Date(); return d.getHours()*60 + d.getMinutes(); }
+function fmtHM(mins) { mins = Math.max(0, Math.round(mins)); return `${Math.floor(mins/60)}h ${pad2(mins%60)}m`; }
+function durHM(mins) { mins = Math.max(0, Math.round(mins)); return `${Math.floor(mins/60)}:${pad2(mins%60)}`; }
+function todayRollup(entries) {
+  let total = 0, bill = 0; const cs = new Set(), es = new Set();
+  for (const e of entries) {
+    const d = Math.max(0, e.endMin - e.startMin);
+    total += d; if (e.billable) bill += d;
+    cs.add(e.client); es.add(e.client + '∷' + e.engagement);
+  }
+  return { total: fmtHM(total), billable: fmtHM(bill), clients: cs.size, engagements: es.size };
+}
+/* stable hue for a billable client; non-billable rows get the grey hatch instead */
+const TL_PALETTE = ['#1361FF', '#0A3FA8', '#7AA7FF', '#3F8FFF'];
+function clientColor(name) { let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0; return TL_PALETTE[h % TL_PALETTE.length]; }
+/* whole-hour [lo,hi] window for the timeline — defaults 9a–6p, widened to fit the data + now */
+function dayWindow(entries, nowMin) {
+  let lo = 9*60, hi = 18*60;
+  for (const e of entries) { lo = Math.min(lo, e.startMin); hi = Math.max(hi, e.endMin); }
+  lo = Math.min(lo, nowMin); hi = Math.max(hi, nowMin);
+  lo = Math.floor(lo/60)*60; hi = Math.ceil(hi/60)*60;
+  if (hi - lo < 60) hi = lo + 60;
+  return [lo, hi];
+}
+
+/* GET /workstreams → replace the switcher list. Silently keeps mock data on failure. */
+async function loadWorkstreams() {
+  let rows;
+  try {
+    const r = await fetch('/workstreams', { headers:{ accept:'application/json' } });
+    if (!r.ok) return;
+    rows = await r.json();
+  } catch { return; }
+  if (!Array.isArray(rows)) return;
+  S.haveServer = true;
+  const runningKey = (S.base === 'running' && S.runningIdx >= 0 && S.list[S.runningIdx])
+    ? S.list[S.runningIdx].client + '∷' + S.list[S.runningIdx].engagement : null;
+  S.list = rows.map(w => ({
+    id: w.id,
+    client: w.client || '—',
+    engagement: w.engagement || '',
+    billable: w.billable_default !== false,
+    pinned: !!w.pinned,
+    lastUsed: relTime(w.last_used_at),
+  }));
+  // re-anchor running / selection onto the refreshed list
+  if (runningKey) {
+    const i = S.list.findIndex(w => w.client + '∷' + w.engagement === runningKey);
+    S.runningIdx = i; if (i < 0) { S.base = 'idle'; }
+  } else { S.runningIdx = -1; }
+  S.selectedIdx = S.runningIdx >= 0 ? S.runningIdx : 0;
+  if (S.emptyMode == null) render();
+}
+
+/* GET /today → replace the day log. Silently keeps the seed on failure.
+ * Accepts either a bare array of entries or { now_min, entries:[...] }.
+ * Entry shape: { start, end, start_min, end_min, client, engagement,
+ *                billable, narrative|desc, running }. */
+async function loadToday() {
+  let data;
+  try {
+    const r = await fetch('/today', { headers: { accept: 'application/json' } });
+    if (!r.ok) return;
+    data = await r.json();
+  } catch { return; }
+  const rows = Array.isArray(data) ? data : (data && Array.isArray(data.entries) ? data.entries : null);
+  if (!rows) return;
+  const mins = (v) => Number.isFinite(+v) ? +v : 0;
+  S.today = {
+    nowMin: (data && Number.isFinite(+data.now_min)) ? +data.now_min : nowMinutes(),
+    entries: rows.map(e => ({
+      start: e.start || '', end: e.end || (e.running ? 'now' : ''),
+      startMin: mins(e.start_min), endMin: mins(e.end_min),
+      client: e.client || '—', engagement: e.engagement || '',
+      billable: e.billable !== false,
+      desc: e.narrative || e.desc || null,
+      running: !!e.running,
+    })),
+  };
+  if (S.tab === 'today' && !qp().has('ref')) render();
+}
+
+/* POST /timer/{start,stop,switch}. Fire-and-forget — the authoritative state
+ * change comes back as a timer_started / timer_stopped / entry_logged /
+ * workstream_switched WS event, which handleWs() reconciles. No-op (just the
+ * optimistic local update stands) when there's no server. */
+function cmdTimer(path, workstreamId) {
+  if (!S.haveServer) return;
+  const opts = { method:'POST', headers:{ 'content-type':'application/json' } };
+  if (workstreamId != null) opts.body = JSON.stringify({ workstream_id: workstreamId });
+  fetch('/timer/' + path, opts).catch(() => { /* stay on the optimistic local state */ });
+}
+
+/* current running duration H:MM:SS */
+function curDur() {
+  const s = Math.max(0, Math.floor((Date.now() - S.timerStart) / 1000));
+  return `${Math.floor(s/3600)}:${pad2(Math.floor(s%3600/60))}:${pad2(s%60)}`;
+}
+function startedClock() {
+  const d = new Date(S.timerStart);
+  let h = d.getHours(); const ap = h < 12 ? 'AM' : 'PM'; h = h % 12 || 12;
+  return `${h}:${pad2(d.getMinutes())} ${ap}`;
+}
+
+/* ---------- fragments ---------- */
+function chrome() {
+  // No title text — the tray icon already says what this is. Just the brand
+  // mark, the connection dot, and the Esc hint.
+  return `<div class="pv-chrome">
+    ${brandMark(14, 8)}
+    <span class="sp"></span>
+    ${ S.connected
+        ? `<span class="pv-conn" data-state="on" title="connected · local"><span class="d"></span></span>`
+        : `<span class="pv-conn" data-state="off" title="reconnecting…"><span class="d"></span>offline</span>` }
+    ${combo(['Esc'], true)}
+  </div>`;
+}
+
+function runningHeader() {
+  const w = S.list[S.runningIdx] || S.list[0] || { client:'—', engagement:'—' };
+  const [h, m, sec] = curDur().split(':');
+  return `<div class="pv-head">
+    <div class="pv-head-tag"><span class="pv-dot-run" aria-hidden="true"></span><span class="pv-lbl" style="color:var(--signal-ink)">running · ${esc(w.client.toLowerCase())}</span></div>
+    <span class="pv-timer" id="pv-bigtimer"><span>${h}</span><span class="c">:</span><span>${m}</span><span class="c tick">:</span><span>${sec}</span></span>
+    <div class="pv-eng">${esc(w.engagement)}</div>
+    ${S.note ? `<div class="pv-note">“${esc(S.note)}”</div>` : ''}
+    <div class="pv-started">started <b>${esc(startedClock())}</b></div>
+  </div>`;
+}
+function idleHeader() {
+  return `<div class="pv-head">
+    <div class="pv-head-tag"><span class="pv-dot-idle" aria-hidden="true"></span><span class="pv-lbl">idle · no timer running</span></div>
+    <span class="pv-timer idle pv-mono">—:—:—</span>
+    <div class="pv-idle-hint"><span>Select a workstream and press</span>${combo(['Ctrl','Shift',';'])}<span>to start.</span></div>
+  </div>`;
+}
+
+function pinSvg() { return `<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden><path d="M5 1 V3 L7 5 H3 L5 3 M5 5 V9" stroke="var(--ink-4)" stroke-width="1" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`; }
+
+function switcherRow(w, i) {
+  const running = S.base === 'running' && i === S.runningIdx;
+  const sel = i === S.selectedIdx;
+  const gutter = running ? `<span class="d"></span>` : (w.pinned ? pinSvg() : '');
+  const rc = running ? 'now' : recency(w, i);
+  return `<div class="pv-row${sel ? ' selected' : ''}${running ? ' running' : ''}" data-act="select" data-i="${i}">
+    <div class="gutter">${gutter}</div>
+    <div class="body">
+      <div class="cl">${esc(w.client)}</div>
+      <div class="en">${esc(w.engagement)}${w.billable === false ? ' <span class="int">· internal</span>' : ''}</div>
+    </div>
+    <div class="rc">${esc(rc)}</div>
+  </div>`;
+}
+function switcher() {
+  const rows = S.list.map(switcherRow).join('');
+  return `<div class="pv-switch">
+    <div class="pv-switch-head"><span class="pv-lbl">workstreams</span><span class="sp"></span><span class="keys">${combo(['Tab'],true)}<span>·</span>${combo(['↵'],true)}</span></div>
+    <div class="pv-rows">${rows}</div>
+    <div class="pv-switch-foot"><button class="pv-link" data-act="open-recorded">View all in Recorded Time ↗</button></div>
+  </div>`;
+}
+
+/* ---------- tab strip: Workstreams | Today ---------- */
+function tabStrip() {
+  const total = todayRollup(S.today.entries).total;
+  const tab = (id, label, meta) => {
+    const on = S.tab === id;
+    return `<button class="pv-tab${on ? ' on' : ''}" data-act="tab" data-v="${id}"${on ? ' aria-current="page"' : ''}><span class="t">${esc(label)}</span>${meta ? `<span class="m">· ${esc(meta)}</span>` : ''}</button>`;
+  };
+  return `<div class="pv-tabs">
+    ${tab('workstreams', 'Workstreams', null)}
+    ${tab('today', 'Today', total)}
+    <span class="sp"></span>
+    <span class="arrows">${combo(['←'], true)}${combo(['→'], true)}</span>
+  </div>`;
+}
+
+/* ---------- today panel: roll-up · timeline · entry list ---------- */
+function todayCounters(s) {
+  const cell = (k, v, bill) => `<div class="pv-counter${bill ? ' bill' : ''}"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`;
+  return `<div class="pv-counters">${cell('total', s.total)}${cell('billable', s.billable, true)}${cell('clients', String(s.clients))}${cell('engagements', String(s.engagements))}</div>`;
+}
+function todayTimeline(entries, nowMin, lo, hi, bare) {
+  const span = Math.max(1, hi - lo);
+  const pct = (m) => ((Math.max(lo, Math.min(hi, m)) - lo) / span) * 100;
+  let ticks = '';
+  for (let m = lo; m <= hi; m += 120) {
+    const h24 = Math.floor(m / 60);
+    const h = h24 === 0 ? 12 : (h24 > 12 ? h24 - 12 : h24);
+    const ap = h24 >= 12 ? 'p' : 'a';
+    ticks += `<span class="pv-tl-tick" style="left:${pct(m).toFixed(3)}%">${h}${ap}</span>`;
+  }
+  const np = pct(nowMin);
+  const blocks = entries.map(e => {
+    const left = pct(e.startMin);
+    const w = Math.max(0.4, pct(e.endMin) - left);
+    const cls = 'pv-tl-blk' + (e.billable ? '' : ' nb') + (e.running ? ' run' : '');
+    const bg = e.billable ? clientColor(e.client) : '#C7CCD0';
+    return `<div class="${cls}" style="left:${left.toFixed(3)}%;width:${w.toFixed(3)}%;background:${bg}" title="${esc(e.client)} · ${esc(e.engagement)} · ${esc(durHM(e.endMin - e.startMin))}"></div>`;
+  }).join('');
+  return `<div class="pv-timeline${bare ? ' bare' : ''}">
+    <div class="pv-tl-track">${blocks}<div class="pv-tl-now" style="left:${np.toFixed(3)}%"></div><div class="pv-tl-nowdot" style="left:${np.toFixed(3)}%"></div></div>
+    <div class="pv-tl-axis">${ticks}<span class="pv-tl-tick now" style="left:${np.toFixed(3)}%">now</span></div>
+  </div>`;
+}
+function editGlyph() {
+  return `<svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><path d="M1.5 9.5 L1.5 7.5 L7 2 L9 4 L3.5 9.5 Z M6.5 2.5 L8.5 4.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+function todayRow(e) {
+  const run = !!e.running;
+  const pip = run ? `<span class="d run"></span>`
+    : e.billable ? `<span class="d" style="background:${clientColor(e.client)}"></span>`
+    : `<span class="d nb"></span>`;
+  const dur = durHM(e.endMin - e.startMin);
+  const desc = e.desc ? `<span class="ds"> &nbsp;${esc(e.desc)}</span>` : '';
+  const nb = e.billable ? '' : `<span class="nb"> · non-billable</span>`;
+  // closed rows get a hover "edit" affordance that opens the full Recorded Time
+  // page (heavy edits stay there); the running row is read-only.
+  const pencil = run ? '' : `<button class="edit" data-act="open-recorded" title="edit in Recorded Time" aria-label="edit in Recorded Time">${editGlyph()}</button>`;
+  return `<div class="pv-trow${run ? ' run' : ''}">
+    <div class="l1">
+      <div class="pip">${pip}</div>
+      <div class="rng">${esc(e.start)}<span class="dash">–</span>${esc(e.end)}</div>
+      <div class="cl${e.billable ? '' : ' nb'}">${esc(e.client)}</div>
+      <div class="dur${e.billable ? '' : ' nb'}">${esc(dur)}${run ? '<span class="tk"></span>' : ''}</div>
+    </div>
+    <div class="l2"><div></div><div></div>
+      <div class="meta"><span class="eng${e.billable ? '' : ' nb'}">${esc(e.engagement)}</span>${nb}${desc}</div>
+    </div>
+    ${pencil}
+  </div>`;
+}
+function todayEmpty() {
+  return `<div class="pv-today-empty"><div class="h">Nothing logged yet today.</div>
+    <div class="p">Press ${combo(['Ctrl','Shift',';'])} to start the active timer.</div></div>`;
+}
+function todayPanel() {
+  const entries = [...S.today.entries].sort((a, b) => a.startMin - b.startMin);
+  const empty = entries.length === 0;
+  const stats = empty ? { total:'0h 00m', billable:'0h 00m', clients:0, engagements:0 } : todayRollup(entries);
+  const [lo, hi] = dayWindow(empty ? [] : entries, S.today.nowMin);
+  return todayCounters(stats)
+    + todayTimeline(empty ? [] : entries, S.today.nowMin, lo, hi, empty)
+    + (empty ? todayEmpty() : `<div class="pv-today">${entries.map(todayRow).join('')}</div>`);
+}
+
+function actionBar() {
+  return `<div class="pv-actions">
+    <button class="pv-btn" data-act="add-open">${combo(['Ctrl','Shift','H'])} add workstream</button>
+    <span class="sp"></span>
+    <button class="pv-link" data-act="open-recorded">Open Recorded Time ↗</button>
+  </div>`;
+}
+
+/* ---------- add-workstream form ---------- */
+const KNOWN_CLIENTS = () => {
+  const set = new Set(S.list.map(w => w.client));
+  return [...set].sort();
+};
+function addForm() {
+  const st = S.addStage;
+  const clientFocus = st === 'client';
+  const engFocus = st === 'engagement';
+  const engDisabled = !S.addClient.trim();
+  const clientMatches = KNOWN_CLIENTS().filter(c => !S.addClient.trim() || c.toLowerCase().includes(S.addClient.trim().toLowerCase()));
+  const engMatches = engDisabled ? [] : [...new Set(S.list.filter(w => w.client === S.addClient.trim() || w.client.toLowerCase() === S.addClient.trim().toLowerCase()).map(w => w.engagement))];
+  const clientDrop = clientFocus ? `<div class="pv-fdrop">
+      ${clientMatches.map((c,i) => `<div class="it${i===0?' active':''}" data-act="pick-client" data-v="${esc(c)}"><span class="nm">${esc(c)}</span></div>`).join('')}
+      <div class="new" data-act="pick-client" data-v="${esc(S.addClient.trim())}">${'<span class="pv-mono" style="color:var(--ink-4)">+</span>'} New client${S.addClient.trim()?` “${esc(S.addClient.trim())}”`:''}…</div>
+    </div>` : '';
+  const engDrop = engFocus ? `<div class="pv-fdrop">
+      ${engMatches.length ? engMatches.map((e,i) => `<div class="it${i===0&&!S.addEngagement?' active':''}" data-act="pick-eng" data-v="${esc(e)}"><span class="nm">${esc(e)}</span></div>`).join('') : `<div class="it muted"><span class="nm">No engagements yet for this client</span></div>`}
+      <div class="new" data-act="pick-eng" data-v="${esc(S.addEngagement.trim())}">${'<span class="pv-mono" style="color:var(--ink-4)">+</span>'} New engagement${S.addEngagement.trim()?` “${esc(S.addEngagement.trim())}”`:''}…</div>
+    </div>` : '';
+  return `<div class="pv-add">
+    <div class="pv-add-head">${combo(['Ctrl','Shift','H'])}<span class="pv-lbl" style="color:var(--signal-ink)">add workstream</span><span class="sp"></span><span class="next">${combo(['Tab'],true)} next field</span></div>
+    <div class="pv-field">
+      <div class="lab"><span class="pv-lbl">Client</span></div>
+      <div class="ctl">
+        <div class="box${clientFocus?' focus':''}"><input id="pv-add-client" value="${esc(S.addClient)}" placeholder="Type to search…" data-addf="client" />
+          <svg class="ca" width="9" height="9" viewBox="0 0 9 9" aria-hidden><path d="M1.5 3 L4.5 6 L7.5 3" stroke="var(--ink-3)" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        ${clientDrop}
+      </div>
+    </div>
+    <div class="pv-field">
+      <div class="lab${engDisabled?' dim':''}"><span class="pv-lbl">Engagement</span></div>
+      <div class="ctl">
+        <div class="box${engFocus?' focus':''}${engDisabled?' disabled':''}"><input id="pv-add-eng" value="${esc(S.addEngagement)}" placeholder="${engDisabled?'Pick a client first':'New engagement name…'}" data-addf="engagement"${engDisabled?' disabled':''} />
+          ${engDisabled?'':`<svg class="ca" width="9" height="9" viewBox="0 0 9 9" aria-hidden><path d="M1.5 3 L4.5 6 L7.5 3" stroke="var(--ink-3)" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`}</div>
+        ${engDrop}
+      </div>
+    </div>
+    <div class="pv-field">
+      <div class="lab"><span class="pv-lbl">Billable</span></div>
+      <div class="ctl"><span class="pv-bill-toggle${S.addBillable?' on':''}" data-act="add-bill"><span class="pv-bill-sw"></span><span style="font-size:13px;color:var(--ink-2)">${S.addBillable?'Yes':'No'}</span></span></div>
+    </div>
+    <div class="pv-add-actions">
+      <button class="pv-btn ink" data-act="add-submit-start">${combo(['↵'],true)} Add and start timer</button>
+      <button class="pv-btn" data-act="add-submit-only">Add only</button>
+      <span class="sp"></span>
+      <button class="pv-btn ghost" data-act="add-cancel">${combo(['Esc'],true)} cancel</button>
+    </div>
+  </div>`;
+}
+
+/* ---------- empty panels ---------- */
+function emptyFirstRun() {
+  return `<div class="pv-empty"><div class="h">No workstreams yet.</div>
+    <div class="p" style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center">Press ${combo(['Ctrl','Shift','H'])} to add your first client.</div></div>`;
+}
+function emptyHistorical() {
+  return `<div class="pv-empty"><div class="h">No active workstreams.</div>
+    <div class="p">Press ${combo(['Ctrl','Shift','H'])} to add one, or <button class="pv-link" data-act="open-recorded">open Recorded Time</button> to revive an old one.</div>
+    <div class="meta">42 workstreams in history · last used Apr 12</div></div>`;
+}
+
+/* ---------- hotkey reference card (?ref) ---------- */
+function refCard() {
+  const rows = [
+    { k:['Ctrl','Shift','/'], v:'open / close popover', s:'glance, switch, dismiss · global' },
+    { k:['Ctrl','Shift',';'], v:'start the active timer', s:'global · works from anywhere' },
+    { k:['Ctrl','Shift',"'"], v:'stop the active timer',  s:'global · works from anywhere' },
+    { k:['Ctrl','Shift','H'], v:'add a workstream',       s:'global · opens popover if closed' },
+    { k:['Tab'],              v:'next workstream',        s:'inside the popover', dim:true },
+    { k:['Shift','Tab'],      v:'previous workstream',    s:'inside the popover', dim:true },
+    { k:['↵'],                v:'commit selection',       s:'switches the running timer', dim:true },
+    { k:['Esc'],              v:'dismiss popover',        s:'no changes made', dim:true },
+  ];
+  return `<div class="pv pv-ref">
+    <span class="pv-lbl">keyboard reference</span>
+    <h1>Four hotkeys, four verbs.</h1>
+    <div class="lede">Distinct, no overlap. <span class="pv-mono">;</span> and <span class="pv-mono">'</span> sit next to each other on the keyboard — start and stop live where the muscle memory already is. <span class="pv-mono">/</span> opens the surface that ties it all together; <span class="pv-mono">H</span> adds a workstream.</div>
+    <div class="pv-ref-grid">${rows.map(r => `<div class="pv-ref-cell${r.dim?' dim':''}">${combo(r.k, r.dim)}<div class="verb">${esc(r.v)}</div><div class="sub">${esc(r.s)}</div></div>`).join('')}</div>
+  </div>`;
+}
+
+/* ---------- compose ---------- */
+function popoverInner() {
+  const header = S.base === 'running' ? runningHeader() : idleHeader();
+  // add form takes over the middle + action bar; no tab strip while adding.
+  if (S.adding) return chrome() + header + addForm();
+  // middle zone — Today, an empty-workstreams panel, or the switcher.
+  let middle;
+  if (S.tab === 'today') middle = todayPanel();
+  else if (S.emptyMode === 'first-run') middle = emptyFirstRun();
+  else if (S.emptyMode === 'no-active') middle = emptyHistorical();
+  else middle = switcher();
+  return chrome() + header + tabStrip() + middle + actionBar();
+}
+// Replay the pop-in entrance animation only on a fresh summon, not on every
+// re-render (typing into the add form, WS ticks, the running clock, etc.) -
+// otherwise the popover flickers on every keystroke.
+let popEntry = true;
+function render() {
+  if (qp().has('ref')) { $root().innerHTML = refCard(); reportHeight(); return; }
+  const toast = S.switchToast
+    ? `<div class="pv-toast"><span class="d"></span>switched · dismissing in ${S.switchToast.secs.toFixed(1)}s</div>` : '';
+  const entry = popEntry ? ' enter' : ''; popEntry = false;
+  $root().innerHTML = `<div class="pv${entry}">${toast}<div class="pv-card">${popoverInner()}</div>
+    <div style="position:absolute;bottom:-7px;right:26px;width:14px;height:14px;background:var(--panel);border-right:1px solid rgba(20,23,26,.06);border-bottom:1px solid rgba(20,23,26,.06);transform:rotate(45deg)" aria-hidden="true"></div>
+  </div>`;
+  wire();
+  // keep the running clock ticking
+  ensureTick();
+  // keep the highlighted row inside the (capped, scrollable) switcher viewport
+  const selRow = $root().querySelector('.pv-row.selected');
+  if (selRow && selRow.scrollIntoView) selRow.scrollIntoView({ block:'nearest' });
+  // autofocus add fields
+  if (S.adding) {
+    const id = S.addStage === 'engagement' ? 'pv-add-eng' : 'pv-add-client';
+    const el = document.getElementById(id); if (el && !el.disabled) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  }
+  reportHeight();   // hug the native popover window to the card's height
+}
+function ensureTick() {
+  if (tickHandle) { clearInterval(tickHandle); tickHandle = null; }
+  if (S.base === 'running' && !qp().has('ref')) {
+    tickHandle = setInterval(() => {
+      const el = document.getElementById('pv-bigtimer'); if (!el) return;
+      const [h,m,sec] = curDur().split(':');
+      el.innerHTML = `<span>${h}</span><span class="c">:</span><span>${m}</span><span class="c tick">:</span><span>${sec}</span>`;
+    }, 1000);
+  }
+}
+
+/* ---------- transitions ---------- */
+function setTab(id) {
+  if (S.adding || (id !== 'workstreams' && id !== 'today') || id === S.tab) return;
+  S.tab = id;
+  cancelSwitchToast();
+  render();
+}
+function switchTab(dir) {
+  if (S.adding) return;
+  setTab(S.tab === 'today' ? 'workstreams' : 'today');
+  void dir; // ←/→ are symmetric across two tabs
+}
+function cycleSelection(dir) {
+  if (S.adding || !S.list.length) return;
+  S.selectedIdx = (S.selectedIdx + dir + S.list.length) % S.list.length;
+  cancelSwitchToast();
+  render();
+}
+function startTimerOn(idx) {
+  if (idx == null || idx < 0 || idx >= S.list.length) return;
+  cmdTimer('start', S.list[idx].id);
+  S.base = 'running'; S.runningIdx = idx; S.selectedIdx = idx;
+  S.timerStart = Date.now();
+  S.note = '';
+  // bump to "now"
+  S.list[idx] = { ...S.list[idx], lastUsed:'now' };
+  render();
+}
+function stopTimer() {
+  if (S.base !== 'running') return;
+  cmdTimer('stop');
+  if (S.runningIdx >= 0) S.list[S.runningIdx] = { ...S.list[S.runningIdx], lastUsed:'just now' };
+  S.base = 'idle'; S.runningIdx = -1;
+  render();
+}
+function switchTo(idx) {
+  if (idx == null || idx === S.runningIdx) return;
+  const wasRunning = S.base === 'running' && S.runningIdx >= 0;
+  // running → switch; idle → just start
+  cmdTimer(wasRunning ? 'switch' : 'start', S.list[idx].id);
+  if (wasRunning) S.list[S.runningIdx] = { ...S.list[S.runningIdx], lastUsed:'just now' };
+  S.base = 'running'; S.runningIdx = idx; S.selectedIdx = idx;
+  S.timerStart = Date.now();
+  S.note = '';
+  S.list[idx] = { ...S.list[idx], lastUsed:'now' };
+  startSwitchToast();
+  render();
+}
+function startSwitchToast() {
+  cancelSwitchToast();
+  S.switchToast = { secs: 1.0, timer: null };
+  S.switchToast.timer = setInterval(() => {
+    if (!S.switchToast) return;
+    S.switchToast.secs = Math.round((S.switchToast.secs - 0.1) * 10) / 10;
+    if (S.switchToast.secs <= 0) {
+      cancelSwitchToast();
+      // 1s countdown done → popover gets out of your way.
+      render();
+      requestHide();
+    } else {
+      const t = $root().querySelector('.pv-toast'); if (t) t.innerHTML = `<span class="d"></span>switched · dismissing in ${S.switchToast.secs.toFixed(1)}s`;
+    }
+  }, 100);
+}
+function cancelSwitchToast() { if (S.switchToast && S.switchToast.timer) clearInterval(S.switchToast.timer); S.switchToast = null; }
+
+/* Ctrl+Shift+H (and the desktop equivalent): popover visible, add-form expanded,
+ * cursor in the client field. Whatever running/idle state we were in is preserved
+ * underneath (S.base / S.runningIdx / S.timerStart are untouched), so the running
+ * timer info survives add-mode. `fromClosed` = the popover was summoned by H from a
+ * closed state, in which case Esc out of the form closes the popover entirely. */
+function openAddForm(fromClosed) {
+  if (S.adding) {
+    // already adding (H pressed again) — just put the cursor back in the client field
+    S.addStage = 'client';
+    const el = document.getElementById('pv-add-client'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    return;
+  }
+  cancelSwitchToast();
+  S.openedFromClosed = !!fromClosed;
+  S.adding = true; S.addStage = 'client'; S.addClient = ''; S.addEngagement = ''; S.addBillable = true; S.addBusy = false;
+  // if we were on an empty panel, opening add still works
+  render();
+}
+function readAddFields() {
+  const c = document.getElementById('pv-add-client'); if (c) S.addClient = c.value;
+  const e = document.getElementById('pv-add-eng'); if (e) S.addEngagement = e.value;
+}
+function addAdvance() {
+  readAddFields();
+  if (S.addStage === 'client') {
+    if (!S.addClient.trim()) return;
+    S.addStage = 'engagement'; render();
+  } else if (S.addStage === 'engagement') {
+    // Tab from engagement -> billable focus (no input; just move on)
+    S.addStage = 'billable'; render();
+  }
+}
+async function submitAdd(startTimer) {
+  if (S.addBusy) return;
+  readAddFields();
+  const client = S.addClient.trim(), engagement = S.addEngagement.trim();
+  if (!client || !engagement) {
+    // bounce focus to the missing field
+    S.addStage = !client ? 'client' : 'engagement'; render(); return;
+  }
+  // POST to the registry if the server is live; otherwise stay optimistic (prototype).
+  let serverWs = null;
+  if (S.haveServer) {
+    S.addBusy = true; render();
+    try {
+      const r = await fetch('/workstreams', {
+        method:'POST', headers:{ 'content-type':'application/json' },
+        body: JSON.stringify({ client, engagement, billable: S.addBillable }),
+      });
+      if (r.ok) serverWs = await r.json();
+    } catch { /* fall through to optimistic add */ }
+    S.addBusy = false;
+  }
+  const w = serverWs
+    ? { id: serverWs.id, client: serverWs.client, engagement: serverWs.engagement, billable: serverWs.billable_default !== false, pinned: !!serverWs.pinned, lastUsed: 'now' }
+    : { client, engagement, billable: S.addBillable, pinned:false, lastUsed:'now' };
+  // de-dupe: if the registry already had it, move it to the top rather than doubling
+  const dup = S.list.findIndex(x => x.client === w.client && x.engagement === w.engagement);
+  if (dup >= 0) { S.list.splice(dup, 1); if (S.runningIdx === dup) S.runningIdx = 0; else if (S.runningIdx > dup) S.runningIdx -= 1; }
+  S.list.unshift(w);
+  if (S.runningIdx >= 0) S.runningIdx += 1;   // indices shift by 1 for the unshift
+  S.adding = false; S.openedFromClosed = false;
+  if (S.emptyMode) S.emptyMode = null; // we now have a workstream
+  if (startTimer) { startTimerOn(0); }
+  else { S.base = (S.base === 'running' || S.runningIdx >= 0) ? 'running' : 'idle'; S.selectedIdx = 0; render(); }
+}
+/* Ask the native shell (wry IPC) to hide the popover window. No-op in the
+ * browser prototype — there's no tab to dismiss; the page just stays put. */
+function requestHide() {
+  try { if (window.ipc && typeof window.ipc.postMessage === 'function') window.ipc.postMessage('hide'); } catch {}
+}
+
+/* Tell the native popover shell how tall its window should be so it hugs the
+ * card — no dead grey above or below it (set_content_height / reposition on the
+ * Rust side resize + re-anchor the window to this). Called after every render.
+ * No-op in the browser prototype (there's no window to resize). */
+function reportHeight() {
+  try {
+    if (!(window.ipc && typeof window.ipc.postMessage === 'function')) return;
+    const card = $root().querySelector('.pv-card') || $root().querySelector('.pv-ref');
+    if (!card) return;
+    const h = card.offsetHeight;          // the card's own height — unaffected by viewport / centering
+    if (h < 50) return;                   // layout not settled yet — don't post a bogus tiny value
+    // + the body frame (6 top + 18 bottom) + a couple px slack for the 1px ring & the pointer
+    window.ipc.postMessage('resize:' + Math.ceil(h + 28));
+  } catch {}
+}
+
+/* Auto-dismiss after a stretch of no interaction — a glance surface that
+ * stays out of the way. Re-armed on any key / mouse / wheel activity in the
+ * popover. Pure page-side; in the browser prototype requestHide() is a no-op
+ * so this is harmless there. */
+const IDLE_MS = 30000;   // auto-dismiss the popover after 30s of no interaction
+let idleTimer = null;
+function armIdleDismiss() {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => { requestHide(); }, IDLE_MS);
+}
+
+function cancelAdd() {
+  S.adding = false;
+  // If Ctrl+Shift+H summoned the popover from a closed state, Esc out of the
+  // add form closes the popover; otherwise it just collapses the form and we
+  // stay on the prior (running/idle) state, which is still intact underneath.
+  if (S.openedFromClosed) { S.openedFromClosed = false; render(); requestHide(); return; }
+  render();
+}
+
+function escAction() {
+  cancelSwitchToast();
+  if (S.adding) { cancelAdd(); return; }
+  // Esc on the main popover dismisses it. (Browser prototype: no-op hide, so
+  // it just clears any selection emphasis.)
+  S.selectedIdx = (S.base === 'running' && S.runningIdx >= 0) ? S.runningIdx : 0;
+  render();
+  requestHide();
+}
+
+/* ---------- WebSocket sync (cross-sync with the desktop hotkeys) ---------- */
+let ws = null, wsTimer = null;
+function findOrAddWorkstream(client, engagement, billable) {
+  let i = S.list.findIndex(w => w.client === client && w.engagement === engagement);
+  if (i < 0) { S.list.unshift({ client, engagement, billable: billable !== false, pinned:false, lastUsed:'now' }); i = 0; if (S.runningIdx >= 0) S.runningIdx += 1; }
+  return i;
+}
+function handleWs(m) {
+  if (!m || typeof m !== 'object') return;
+  switch (m.event) {
+    case 'connected': S.connected = true; render(); break;
+    case 'timer_started': {
+      const i = findOrAddWorkstream(m.client || '(no client)', m.engagement || '', true);
+      S.base = 'running'; S.runningIdx = i; S.selectedIdx = i;
+      S.timerStart = m.at ? (Date.parse(m.at) || Date.now()) : Date.now();
+      S.note = m.narrative || '';
+      S.emptyMode = null;
+      cancelSwitchToast(); render(); loadToday(); break;
+    }
+    case 'timer_stopped': {
+      if (S.runningIdx >= 0) S.list[S.runningIdx] = { ...S.list[S.runningIdx], lastUsed:'just now' };
+      S.base = 'idle'; S.runningIdx = -1; cancelSwitchToast(); render(); loadToday(); break;
+    }
+    case 'entry_logged': {
+      const i = S.list.findIndex(w => w.client === m.client);
+      if (i >= 0) S.list[i] = { ...S.list[i], lastUsed:'just now' };
+      render(); loadToday(); break;
+    }
+    case 'workstream_switched': {
+      // arrives after the timer_stopped / entry_logged / timer_started trio —
+      // we're already on the new workstream; just run the "switched · dismissing"
+      // countdown so the popover gets out of the way.
+      startSwitchToast(); render(); break;
+    }
+    case 'hotkey': {
+      // desktop hotkey fired while the popover is up — mirror it locally.
+      if (m.which === 'add_workstream') { openAddForm(false); }   // popover already visible → not "from closed"
+      else if (m.which === 'popover_toggle') { if (!qp().has('ref')) { popEntry = true; render(); } }   // re-pop the entry animation
+      else if (m.which === 'timer_stop') { /* timer_stopped will follow */ }
+      break;
+    }
+    case 'workstream_added': {
+      // registry changed (added from another surface) — re-pull the list.
+      loadWorkstreams();
+      break;
+    }
+    // resync — nothing the popover needs to do
+  }
+}
+function connectWs() {
+  let url; try { url = `ws://${location.host}/ws`; } catch { return; }
+  let opened = false;
+  try { ws = new WebSocket(url); } catch { scheduleWs(); return; }
+  ws.addEventListener('open', () => { opened = true; S.connected = true; render(); });
+  ws.addEventListener('message', (ev) => { try { handleWs(JSON.parse(ev.data)); } catch {} });
+  ws.addEventListener('close', () => { S.connected = false; if (!qp().has('ref')) render(); scheduleWs(); });
+  ws.addEventListener('error', () => {});
+  // if it never opens, just stay standalone (mock data) — don't fake anything
+}
+function scheduleWs() { clearTimeout(wsTimer); wsTimer = setTimeout(connectWs, 1500); }
+
+/* ---------- wiring ---------- */
+function wire() {
+  const root = $root();
+  root.querySelectorAll('[data-act]').forEach(el => {
+    el.addEventListener('click', (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      const act = el.dataset.act;
+      switch (act) {
+        case 'select': {
+          const i = +el.dataset.i;
+          if (i === S.selectedIdx && !S.adding) { switchTo(i); }   // click an already-selected row = switch to it
+          else { S.selectedIdx = i; cancelSwitchToast(); render(); }
+          break;
+        }
+        case 'tab': setTab(el.dataset.v); break;
+        case 'add-open': openAddForm(); break;
+        case 'add-cancel': cancelAdd(); break;
+        case 'add-bill': readAddFields(); S.addBillable = !S.addBillable; render(); break;
+        case 'add-submit-start': submitAdd(true); break;
+        case 'add-submit-only': submitAdd(false); break;
+        case 'pick-client': readAddFields(); S.addClient = el.dataset.v; S.addStage = 'engagement'; render(); break;
+        case 'pick-eng':    readAddFields(); S.addEngagement = el.dataset.v; S.addStage = 'billable'; render(); break;
+        case 'open-recorded':
+          // open the full app in the default browser, not inside the popover's
+          // own webview; the native shell also hides the popover afterward.
+          if (window.ipc && typeof window.ipc.postMessage === 'function') window.ipc.postMessage('open-recorded');
+          else { try { window.open('/recorded', '_blank'); } catch { window.location.href = '/recorded'; } }
+          break;
+        default: break;
+      }
+    });
+  });
+  // hold the switch-toast open if the mouse enters the popover
+  const card = root.querySelector('.pv-card');
+  if (card && S.switchToast) card.addEventListener('mouseenter', () => cancelSwitchToast(), { once:true });
+  // add-form inputs
+  if (S.adding) {
+    root.querySelectorAll('[data-addf]').forEach(inp => {
+      inp.addEventListener('input', () => {
+        readAddFields();
+        // re-render the relevant dropdown only (cheap full re-render is fine here)
+        render();
+      });
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); if (S.addStage === 'client') { addAdvance(); } else { submitAdd(true); } }
+        else if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); addAdvance(); }
+        else if (e.key === 'Escape') { e.preventDefault(); cancelAdd(); }
+      });
+    });
+  }
+}
+
+/* any interaction in the popover (or the window (re)appearing) defers the
+ * idle auto-dismiss */
+['keydown','mousedown','mousemove','wheel'].forEach(ev =>
+  document.addEventListener(ev, () => { if (!qp().has('ref')) armIdleDismiss(); }, { passive:true }));
+window.addEventListener('focus', () => { if (!qp().has('ref')) armIdleDismiss(); });
+document.addEventListener('visibilitychange', () => {
+  if (qp().has('ref')) return;
+  if (document.visibilityState === 'visible') armIdleDismiss(); else clearTimeout(idleTimer);
+});
+
+/* global hotkeys (the browser sees Ctrl+Shift+… when this tab is focused) */
+document.addEventListener('keydown', (e) => {
+  if (qp().has('ref')) return;
+  const k = (e.key || '').toLowerCase();
+  if (e.ctrlKey && e.shiftKey) {
+    if (k === 'h') { e.preventDefault(); openAddForm(false); return; }
+    // while the add-workstream form is up, the timer hotkeys are suppressed —
+    // the form must be submitted or cancelled first.
+    if (S.adding && (k === ';' || k === "'" || k === '"')) { e.preventDefault(); return; }
+    if (k === ';') { e.preventDefault(); if (S.base !== 'running') startTimerOn(S.selectedIdx >= 0 ? S.selectedIdx : 0); return; }
+    if (k === "'" || k === '"') { e.preventDefault(); stopTimer(); return; }
+    if (k === '/' || k === '?') { e.preventDefault(); /* toggle: in-browser there's nothing to toggle — re-pop the entry animation */ popEntry = true; render(); return; }
+  }
+  if (S.adding) return; // add-form inputs handle their own keys
+  if (k === 'escape') { e.preventDefault(); escAction(); return; }
+  if (k === 'arrowleft')  { e.preventDefault(); switchTab(-1); return; }
+  if (k === 'arrowright') { e.preventDefault(); switchTab(1);  return; }
+  if (S.tab !== 'workstreams') return;   // Today tab: ←/→ + Esc are ours; Tab/↑/↓ keep native behavior (scroll, focus)
+  if (k === 'tab') { e.preventDefault(); cycleSelection(e.shiftKey ? -1 : 1); return; }
+  if (k === 'arrowdown') { e.preventDefault(); cycleSelection(1); return; }
+  if (k === 'arrowup') { e.preventDefault(); cycleSelection(-1); return; }
+  if (k === 'enter') { e.preventDefault(); if (S.selectedIdx >= 0 && S.selectedIdx !== S.runningIdx) switchTo(S.selectedIdx); return; }
+});
+
+/* ---------- boot ---------- */
+S.emptyMode = emptyMode();
+if (S.emptyMode) { S.base = 'idle'; S.runningIdx = -1; S.list = SEED_WORKSTREAMS.map(w => ({ ...w, lastUsed:w.lastUsed })); if (S.emptyMode === 'first-run') S.list = []; }
+if (qp().get('tab') === 'today') S.tab = 'today';   // ?tab=today opens straight on the Today tab
+render();
+loadWorkstreams();           // pull the real registry (no-op + keeps mock data if /workstreams 404s)
+loadToday();                 // pull today's day-log (no-op + keeps the seed if /today 404s)
+if (qp().get('add') === '1') openAddForm(true);   // desktop Ctrl+Shift+H launched us straight into add-mode
+connectWs();
+if (!qp().has('ref')) armIdleDismiss();   // start the idle auto-dismiss clock
+})();
+</script>
+</body>
+</html>

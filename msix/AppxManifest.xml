@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPEC §6.1 packaging manifest.
+
+  Capabilities locked in by spec / review:
+    - runFullTrust:                   needed for global hotkey registration
+                                      and Win32 named pipe IPC
+    - StartupTask (uap5):             requests autostart on user login
+                                      (Windows requires user consent on
+                                      first launch via Settings -> Startup
+                                      Apps; per SPEC §6.1)
+    - unvirtualizedResources (rescap) + desktop6:FileSystemWriteVirtualization=disabled:
+                                      disables MSIX AppData virtualization so
+                                      writes to %LOCALAPPDATA%\TimeTracker\ land at
+                                      the real path, not a per-package shadow.
+                                      The property element goes under <Properties>
+                                      (NOT as an <Extension>); needs the rescap
+                                      capability. Requires Win10 1903+.
+
+  MinVersion 10.0.19041.0 (Windows 10 2004): the tray popover calls
+  SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) so a client name on it
+  stays out of a shared screen — that API *fails* (it is NOT a no-op) on
+  builds older than 2004, leaving the popover fully capturable. Since the
+  screen-capture exclusion is a confidentiality *promise*, the floor is
+  raised to 2004 (this drops Win10 1903/1909 — fine for a 2026 accountant's
+  machine; 21H2+ or Win11 in practice). 2004 also satisfies the desktop6
+  property above (which only needs 1903).
+
+  Identity:
+    - Name "RyanStewart.TimeTracker" matches SPEC §6.1 bundle identity.
+    - Publisher CN must EXACTLY match the Subject of the code-signing
+      certificate. UPDATE THIS to the cert's Subject before packaging
+      or signtool will reject the package.
+    - Version is dot-separated 4 parts. Bump the third octet for normal
+      releases; reserve fourth for emergency hotfix increments.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+  IgnorableNamespaces="uap uap5 rescap desktop6">
+
+  <Identity Name="RyanStewart.TimeTracker"
+            Publisher="CN=Ryan Stewart, O=Ryan Stewart, L=Bellingham, S=Washington, C=US"
+            Version="0.1.0.2" />
+
+  <Properties>
+    <DisplayName>Time Tracker</DisplayName>
+    <PublisherDisplayName>Ryan Stewart</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <!--
+      Disable MSIX AppData virtualization. Without this, writes to
+      %LOCALAPPDATA%\TimeTracker\ are redirected to a per-package shadow that
+      external tools (and the human editing config.toml) can't find. This
+      element goes directly under <Properties> - NOT inside an <Extension> -
+      and requires the unvirtualizedResources capability declared below.
+      desktop6 element: needs Win10 1903+ (see MinVersion).
+    -->
+    <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop"
+                        MinVersion="10.0.19041.0"
+                        MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="TimeTracker"
+                 Executable="time-tracker.exe"
+                 EntryPoint="Windows.FullTrustApplication">
+
+      <uap:VisualElements DisplayName="Time Tracker"
+                          Description="Hotkey-driven time tracker"
+                          BackgroundColor="transparent"
+                          Square150x150Logo="Assets\Square150x150Logo.png"
+                          Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+      </uap:VisualElements>
+
+      <Extensions>
+        <!--
+          Autostart (SPEC §6.1). User must consent on first launch via
+          Windows Settings -> Apps -> Startup. The manifest only REQUESTS
+          - it does not enable autostart unilaterally.
+        -->
+        <uap5:Extension Category="windows.startupTask">
+          <uap5:StartupTask TaskId="TimeTrackerAutoStart"
+                            Enabled="true"
+                            DisplayName="Time Tracker" />
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <!-- Required for the <desktop6:FileSystemWriteVirtualization>disabled</> property above. -->
+    <rescap:Capability Name="unvirtualizedResources" />
+  </Capabilities>
+
+</Package>

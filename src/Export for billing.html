@@ -1,0 +1,1049 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Time Tracker · Export for billing</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<style>
+  /* ---------- Time Tracker visual system v0.3 (shared with live_view.html) --- */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #F2F3F1; }
+  .eb-root {
+    --paper:#F2F3F1; --paper-2:#ECEEEC; --panel:#FFFFFF;
+    --ink:#14171A; --ink-2:#3C434B; --ink-3:#6A727C; --ink-4:#9097A0;
+    --rule:#E1E4E6; --rule-2:#D2D7DB; --rule-strong:#BFC5CA;
+    --signal:#1361FF; --signal-soft:#DCE8FF; --signal-ink:#0A3FA8;
+    --good:#1E8A52; --warn:#B45309; --bad:#C0392B;
+    --good-soft:#E1F1E8; --warn-soft:#F7E9D1; --bad-soft:#F5D9D4;
+    --sans:-apple-system, BlinkMacSystemFont, "Segoe UI","SF Pro Text", system-ui, "Helvetica Neue", Arial, sans-serif;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --shadow-1: 0 1px 0 rgba(20,23,26,.04), 0 1px 2px rgba(20,23,26,.05);
+    --shadow-2: 0 1px 0 rgba(20,23,26,.04), 0 8px 24px -8px rgba(20,23,26,.10);
+
+    font-family: var(--sans);
+    color: var(--ink); background: var(--paper);
+    font-size: 13.5px; line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "tnum";
+    background-image:
+      linear-gradient(to right,  rgba(20,23,26,.035) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(20,23,26,.035) 1px, transparent 1px);
+    background-size: 56px 56px;
+    background-position: -1px -1px;
+    width: 100%; min-height: 100%;
+    padding: 24px 56px 96px;
+    position: relative;
+  }
+  .eb-root, .eb-root * { box-sizing: border-box; }
+  body { background: var(--paper); }
+  .eb-page { max-width: 1180px; margin: 0 auto; }
+  .eb-mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .eb-tt   { font-family: var(--mono); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-4); }
+
+  /* ---------- chrome ---------- */
+  .eb-chrome { display:flex; align-items:center; gap:16px; padding: 0 0 22px; }
+  .eb-brand  { display:flex; align-items:center; gap:12px; }
+  .eb-mark   { width:28px; height:28px; border-radius:7px; background:var(--ink);
+               display:grid; place-items:center;
+               box-shadow: inset 0 0 0 1px rgba(255,255,255,.06), 0 1px 0 rgba(20,23,26,.2); }
+  .eb-mark::before { content:""; width:8px; height:8px; background:var(--signal);
+               border-radius:2px; box-shadow:0 0 0 2px var(--ink); }
+  .eb-bname  { display:flex; flex-direction:column; line-height:1.05; }
+  .eb-bname b { font-weight:600; font-size:15px; letter-spacing:-.005em; }
+  .eb-bname span { font-family:var(--mono); font-size:10.5px; letter-spacing:.14em;
+               text-transform:uppercase; color:var(--ink-3); margin-top:2px; }
+
+  .eb-tabs   { display:flex; gap:4px; margin-left:18px; }
+  .eb-tab    { padding:8px 14px; font-size:13.5px; color:var(--ink-3); cursor:pointer;
+               border-radius:7px; border:1px solid transparent; user-select:none; font-weight:500;
+               letter-spacing:-.005em; text-decoration:none; }
+  .eb-tab:hover { color:var(--ink-2); }
+  .eb-tab[data-on="1"] { font-weight:600; color:var(--ink); background:var(--panel);
+               border-color:var(--rule); box-shadow:0 1px 0 rgba(20,23,26,.03); }
+
+  .eb-spacer { flex:1; }
+  .eb-conn   { display:inline-flex; align-items:center; gap:9px; padding:6px 12px 6px 10px;
+               border:1px solid var(--rule); background:var(--panel); border-radius:999px;
+               font-family:var(--mono); font-size:11.5px; color:var(--ink); box-shadow:var(--shadow-1); }
+  .eb-conn .eb-dot { width:8px; height:8px; border-radius:50%; background:var(--good);
+               box-shadow:0 0 0 3px rgba(30,138,82,.16); }
+
+  /* ---------- page heading ---------- */
+  .eb-pagehead { display:flex; align-items:flex-end; justify-content:space-between;
+                 padding: 4px 0 22px; gap: 24px; }
+  .eb-pagehead h1 { margin:0; font-size:26px; letter-spacing:-.018em; font-weight:600; }
+  .eb-pagehead .eb-sub { color:var(--ink-3); font-size:13.5px; margin-top:6px; max-width: 720px; }
+  .eb-pagehead .eb-runid { font-family:var(--mono); font-size:11px; color:var(--ink-4);
+                 letter-spacing:.04em; text-align:right; white-space:nowrap; }
+  .eb-back { color:var(--ink-3); text-decoration:none; font-size:13; display:inline-flex;
+                 align-items:center; gap:6px; }
+  .eb-back:hover { color:var(--ink-2); }
+
+  /* ---------- section ---------- */
+  .eb-sec { background:var(--panel); border:1px solid var(--rule); border-radius:10px;
+            box-shadow: var(--shadow-1); margin-bottom: 18px; overflow:hidden; }
+  .eb-sec-head { display:flex; align-items:center; gap:14px; padding:14px 20px;
+                 border-bottom:1px solid var(--rule); background:linear-gradient(180deg,#FCFDFD,#F7F8F7); }
+  .eb-sec-num  { width:24px; height:24px; border-radius:6px; background:var(--ink);
+                 color:#fff; display:grid; place-items:center; font-family:var(--mono);
+                 font-size:11.5px; font-weight:500; letter-spacing:.02em; flex:0 0 auto; }
+  .eb-sec-titlewrap { display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .eb-sec h2  { margin:0; font-size:14.5px; font-weight:600; letter-spacing:-.005em; }
+  .eb-sec-sub { color:var(--ink-3); font-size:12.5px; }
+  .eb-sec-right { margin-left:auto; display:inline-flex; align-items:center; gap:14px; }
+  .eb-sec-body { padding:20px; }
+
+  /* ---------- controls ---------- */
+  .eb-pillrow { display:inline-flex; gap:0; padding:3px; background:var(--paper-2);
+                border-radius:8px; }
+  .eb-pill { padding:7px 12px; font-size:12.5px; color:var(--ink-2); cursor:pointer;
+             border-radius:6px; user-select:none; }
+  .eb-pill[data-on="1"] { background:var(--panel); color:var(--ink);
+             box-shadow: var(--shadow-1); font-weight:500; }
+
+  .eb-input { display:inline-flex; align-items:center; gap:8px; height:34px;
+              padding: 0 12px; border:1px solid var(--rule); background:var(--panel);
+              border-radius:7px; font-size:13px; color:var(--ink); min-width:0; }
+  .eb-input .eb-tt { font-size:10px; }
+  .eb-input .eb-caret { color:var(--ink-4); margin-left:auto; }
+  .eb-input.eb-mono input, .eb-input input {
+              border:0; outline:0; background:transparent; font: inherit; color:inherit; width: 100%;
+              font-variant-numeric: tabular-nums; }
+
+  .eb-toggle { display:inline-flex; align-items:center; gap:10px; cursor:pointer; user-select:none; }
+  .eb-switch { width:30px; height:18px; border-radius:999px; background:var(--rule-2); position:relative;
+              transition: background .15s ease; flex:0 0 auto; }
+  .eb-switch::after { content:""; position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%;
+              background:#fff; box-shadow:0 1px 2px rgba(20,23,26,.2); transition: left .15s ease; }
+  .eb-toggle[data-on="1"] .eb-switch { background: var(--signal); }
+  .eb-toggle[data-on="1"] .eb-switch::after { left: 14px; }
+
+  .eb-btn { display:inline-flex; align-items:center; gap:7px; height:34px; padding:0 14px;
+            border:1px solid var(--rule-2); background:var(--panel); border-radius:7px;
+            font: inherit; font-size:13px; color:var(--ink); cursor:pointer;
+            box-shadow: var(--shadow-1); }
+  .eb-btn:hover { border-color: var(--rule-strong); }
+  .eb-btn.eb-btn-ghost { background:transparent; border-color: transparent; box-shadow:none; color:var(--ink-2);
+            padding: 0 8px; height: 30px; }
+  .eb-btn.eb-btn-ghost:hover { background: var(--paper-2); }
+  .eb-btn.eb-btn-primary { background: var(--signal); color:#fff; border-color: var(--signal);
+            box-shadow: 0 1px 0 rgba(10,63,168,.4), 0 8px 24px -8px rgba(19,97,255,.6); font-weight: 500; }
+  .eb-btn.eb-btn-primary[disabled] { background: var(--rule-2); border-color: var(--rule-2); color:#fff;
+            cursor:not-allowed; box-shadow:none; opacity:.7; }
+  .eb-btn.eb-btn-link { border:0; background:transparent; padding:0; height:auto; color:var(--signal);
+            box-shadow:none; }
+  .eb-btn.eb-btn-link:hover { text-decoration: underline; }
+
+  /* ---------- summary stripe ---------- */
+  .eb-summary { display:flex; align-items:center; gap:0;
+                margin-top:18px; padding: 14px 16px; border-top: 1px solid var(--rule);
+                background: linear-gradient(180deg, #FAFBFB, #F5F6F5); }
+  .eb-summary .eb-c { padding: 0 18px; border-left:1px solid var(--rule);
+                display:flex; flex-direction:column; gap:3px; }
+  .eb-summary .eb-c:first-child { padding-left:0; border-left:0; }
+  .eb-summary .eb-c b { font-family:var(--mono); font-variant-numeric: tabular-nums; font-size:18px;
+                color:var(--ink); font-weight:500; letter-spacing:-.005em; }
+  .eb-summary .eb-c span { color:var(--ink-3); font-size:11.5px; }
+
+  /* ---------- table ---------- */
+  .eb-table { width:100%; border-collapse: separate; border-spacing:0; font-size:13px; }
+  .eb-table th, .eb-table td { padding: 10px 14px; text-align:left; vertical-align: top;
+            border-bottom: 1px solid var(--rule); }
+  .eb-table tbody tr:last-child td { border-bottom:0; }
+  .eb-table th { background: linear-gradient(180deg,#FCFDFD,#F7F8F7); font-weight:500;
+            color:var(--ink-3); font-family:var(--mono); font-size:10.5px;
+            letter-spacing:.14em; text-transform:uppercase; padding: 11px 14px; }
+  .eb-table td { color: var(--ink-2); }
+  .eb-table td.eb-mono { color: var(--ink); font-size:12.5px; }
+  .eb-table td.eb-num { text-align:right; font-family:var(--mono); font-variant-numeric: tabular-nums;
+            color: var(--ink); }
+  .eb-table td .eb-narr { color: var(--ink-2); display:block;
+            overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:380px; }
+  .eb-table tr.eb-tot td { background: linear-gradient(180deg,#FAFBFB,#F5F6F5);
+            color: var(--ink); border-top:1px solid var(--rule); font-weight: 500; }
+  .eb-table tr.eb-tot td:first-child { font-family:var(--mono); font-size:10.5px;
+            letter-spacing:.14em; text-transform:uppercase; color: var(--ink-3); font-weight:500; }
+
+  .eb-table tr.eb-row-warn td { background: linear-gradient(90deg, rgba(180,83,9,.06), rgba(180,83,9,0)); }
+  .eb-table tr.eb-row-warn td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+  .eb-table tr.eb-row-bad td  { background: linear-gradient(90deg, rgba(192,57,43,.06), rgba(192,57,43,0)); }
+  .eb-table tr.eb-row-bad td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
+
+  /* cross-filter: the mapping row(s) feeding the current preview filter */
+  .eb-table tr.eb-row-active td { background: linear-gradient(90deg, rgba(19,97,255,.07), rgba(19,97,255,.01)); }
+  .eb-table tr.eb-row-active td:first-child { box-shadow: inset 3px 0 0 var(--signal); }
+
+  /* a voided ("aborted") export run — kept on the books, just muted */
+  .eb-table tr.eb-row-voided td { color: var(--ink-4); background: repeating-linear-gradient(45deg, rgba(192,57,43,.03), rgba(192,57,43,.03) 6px, transparent 6px, transparent 12px); }
+
+  .eb-cellbtn { background:none; border:0; padding:0; margin:0; font:inherit; color:inherit;
+            cursor:pointer; text-align:left; }
+  .eb-cellbtn:hover { color: var(--signal-ink); text-decoration: underline; text-underline-offset: 2px; }
+  td.eb-cell-link .eb-cellbtn:hover { color: var(--signal-ink); }
+
+  .eb-arrow { color: var(--ink-4); font-family: var(--mono); }
+  .eb-pick  { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 10px;
+            border:1px solid var(--rule); background:var(--panel); border-radius:6px;
+            font: inherit; font-size:12.5px; color: var(--ink); cursor:pointer; }
+  .eb-pick:hover { border-color: var(--rule-strong); }
+  .eb-pick.eb-empty { color: var(--warn); border-style: dashed; border-color: var(--warn);
+            background: var(--warn-soft); }
+  .eb-pick .eb-caret { color: var(--ink-4); }
+
+  /* autocomplete combobox (Exports-history client filter) */
+  .eb-acwrap { position: relative; display: inline-block; }
+  .eb-input .eb-caret { cursor: default; }
+  .eb-acpop { position: absolute; left: 0; top: calc(100% + 5px); z-index: 40;
+            min-width: 100%; max-height: 280px; overflow: auto; background: var(--panel);
+            border: 1px solid var(--rule-2); border-radius: 8px; box-shadow: var(--shadow-2); padding: 4px; }
+  .eb-acpop-item { padding: 7px 10px; border-radius: 5px; font-size: 13px; color: var(--ink-2);
+            cursor: pointer; white-space: nowrap; }
+  .eb-acpop-item:hover, .eb-acpop-item.active { background: var(--paper-2); color: var(--ink); }
+  .eb-acpop-empty { padding: 8px 10px; font-size: 12.5px; color: var(--ink-4); }
+
+  /* multi-select client chips (which clients go into the export run) */
+  .eb-pick.eb-clientchip { gap: 8px; }
+  .eb-pick.eb-clientchip .eb-box { width:13px; height:13px; border-radius:3px; border:1.5px solid var(--rule-2);
+            display:inline-flex; align-items:center; justify-content:center; font-size:9px; line-height:1; color:transparent; flex:0 0 auto; }
+  .eb-pick.eb-clientchip .eb-n { font-family:var(--mono); font-size:10.5px; color:var(--ink-4); margin-left:2px; }
+  .eb-pick.eb-clientchip:hover { border-color: var(--rule-strong); }
+  .eb-pick.eb-clientchip.eb-on { background: var(--signal-soft); border-color: transparent; color: var(--signal-ink); }
+  .eb-pick.eb-clientchip.eb-on:hover { background:#cfe0ff; }
+  .eb-pick.eb-clientchip.eb-on .eb-box { background: var(--signal); border-color: var(--signal); color:#fff; }
+  .eb-pick.eb-clientchip.eb-on .eb-n { color: var(--signal-ink); opacity:.7; }
+
+  .eb-bill { display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:11px;
+            color: var(--ink-3); }
+  .eb-bill .eb-dot { width:6px; height:6px; border-radius:50%; background: var(--rule-strong); }
+  .eb-bill.eb-on .eb-dot { background: var(--signal); box-shadow: 0 0 0 2px rgba(19,97,255,.16); }
+  .eb-bill.eb-on { color: var(--signal-ink); }
+
+  /* ---------- status badges ---------- */
+  .eb-badge { display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:11px;
+            padding: 3px 9px; border-radius:999px; letter-spacing:.02em; }
+  .eb-badge.eb-good { background: var(--good-soft); color: var(--good); }
+  .eb-badge.eb-warn { background: var(--warn-soft); color: var(--warn); }
+  .eb-badge.eb-bad  { background: var(--bad-soft);  color: var(--bad); }
+  .eb-badge.eb-neutral { background: var(--paper-2); color: var(--ink-3); }
+  .eb-badge .eb-glyph { display:inline-block; width:10px; text-align:center; line-height:1; }
+
+  /* ---------- banner ---------- */
+  .eb-banner { display:flex; align-items:flex-start; gap:14px; padding:14px 18px;
+            border:1px solid var(--rule); border-radius: 10px; margin-bottom: 18px;
+            background: var(--panel); box-shadow: var(--shadow-1); }
+  .eb-banner .eb-icon { width:24px; height:24px; border-radius:6px; flex:0 0 auto;
+            display:grid; place-items:center; font-family:var(--mono); font-size:13px; font-weight:600; }
+  .eb-banner b { font-weight:600; }
+  .eb-banner.eb-banner-warn { border-color: rgba(180,83,9,.35); background: var(--warn-soft); }
+  .eb-banner.eb-banner-warn .eb-icon { background: var(--warn); color:#fff; }
+  .eb-banner.eb-banner-good { border-color: rgba(30,138,82,.35); background: var(--good-soft); }
+  .eb-banner.eb-banner-good .eb-icon { background: var(--good); color:#fff; }
+  .eb-banner.eb-banner-bad  { border-color: rgba(192,57,43,.35); background: var(--bad-soft); }
+  .eb-banner.eb-banner-bad  .eb-icon { background: var(--bad); color:#fff; }
+  .eb-banner .eb-body { flex:1; min-width:0; font-size: 13.5px; color: var(--ink-2); }
+  .eb-banner .eb-body p { margin:0; }
+  .eb-banner .eb-body .eb-title { color: var(--ink); font-weight: 600; margin-bottom: 2px; }
+  .eb-banner .eb-actions { display:flex; gap:8px; flex:0 0 auto; align-items:center; }
+
+  /* ---------- action bar ---------- */
+  .eb-actionbar { position: sticky; bottom: 0; margin-top: 22px;
+            background: linear-gradient(180deg, rgba(242,243,241,0), var(--paper) 32%);
+            padding-top: 18px; }
+  .eb-actionbar-inner { display:flex; align-items:center; gap: 16px; padding: 16px 20px;
+            background: var(--panel); border: 1px solid var(--rule); border-radius: 12px;
+            box-shadow: var(--shadow-2); }
+  .eb-actionbar .eb-recap { display:flex; flex-direction:column; gap:3px; min-width: 0; }
+  .eb-actionbar .eb-recap .eb-title { font-size:14px; font-weight: 600; color: var(--ink); letter-spacing:-.005em; }
+  .eb-actionbar .eb-recap .eb-sub { color: var(--ink-3); font-size: 12.5px; }
+  .eb-actionbar .eb-cta { margin-left: auto; display:inline-flex; align-items:center; gap: 10px; }
+  .eb-actionbar .eb-btn.eb-btn-primary { height: 40px; padding: 0 18px; font-size: 13.5px; }
+  .eb-actionbar .eb-progress { flex: 1; min-width: 240px; }
+  .eb-progress-bar { height: 6px; background: var(--paper-2); border-radius: 999px; overflow:hidden; }
+  .eb-progress-bar > i { display:block; height:100%; background: var(--signal); border-radius: 999px;
+            transition: width .3s ease; }
+  .eb-progress-text { display:flex; align-items:center; gap:10px; margin-top: 6px;
+            font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+  .eb-progress-text .eb-now { color: var(--ink); }
+  .eb-spin { width:14px; height:14px; border-radius:50%;
+            border: 2px solid var(--signal-soft); border-top-color: var(--signal);
+            animation: eb-spin 0.9s linear infinite; display:inline-block; vertical-align: -2px; }
+  @keyframes eb-spin { to { transform: rotate(360deg); } }
+
+  /* ---------- empty ---------- */
+  .eb-empty { padding: 56px 24px; text-align:center; color: var(--ink-3); }
+  .eb-empty .eb-bigtt { font-family:var(--mono); font-size:11.5px; letter-spacing:.14em;
+            text-transform:uppercase; color: var(--ink-4); margin-bottom: 10px; }
+  .eb-empty h3 { margin: 0 0 6px; font-size: 18px; font-weight: 600; color: var(--ink); letter-spacing:-.01em; }
+  .eb-empty p { margin: 0 auto; max-width: 460px; }
+
+  /* ---------- minor ---------- */
+  .eb-rule { height:1px; background: var(--rule); margin: 14px 0; border:0; }
+  .eb-row-flex { display:flex; gap:14px; align-items:flex-start; flex-wrap: wrap; }
+  .eb-stack { display:flex; flex-direction:column; gap: 14px; }
+  .eb-kv  { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); letter-spacing:.02em; }
+  .eb-kv b { color: var(--ink); font-weight: 500; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration:.001s !important; transition-duration:.001s !important; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+(() => {
+'use strict';
+
+/* =====================================================================
+ * Time Tracker · Export for billing  (wired to the real data layer)
+ *
+ * Self-contained, no build step, no CDN. This page reads recorded time
+ * from the localhost server (GET /api/entries?range=...), rolls it up by
+ * client · engagement for a preview, and — on "Export" — calls
+ * POST /api/export which writes a rollup CSV + a billing-summary PDF into
+ * %USERPROFILE%\TimeTracker\exports\ and records the run in a manifest.
+ * The "Exports history" view (?view=history) lists real runs from
+ * GET /api/exports; "view report" opens GET /api/exports/<run_id>.
+ *
+ * There is no app-name → accounting-name mapping store, so the mapping
+ * step from the original design isn't shown — the preview uses your own
+ * client / engagement names directly, which is what the CSV/PDF contain.
+ * ===================================================================== */
+
+const $root = () => document.getElementById('root');
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+  { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+const fmtH = (h) => { h = Number(h) || 0; return (h >= 10 ? h.toFixed(1) : h.toFixed(h < 0.1 ? 2 : 1)); };
+
+const RANGE_LABELS = {
+  this_month:'This month', last_month:'Last month',
+  this_week:'This week', last_week:'Last week', all:'All time',
+};
+
+/* ---------- state ---------- */
+const S = {
+  view: 'export',          // 'export' | 'history' | 'report'
+  range: 'this_month',
+  loading: true,
+  loadError: null,
+  entries: [],             // ingested /api/entries rows
+  exports: [],             // /api/exports list
+  reportRun: null,         // full run record for the report view
+  reportError: null,
+  // export flow
+  phase: 'ready',          // 'ready' | 'exporting' | 'done' | 'error' | 'empty'
+  exportError: null,
+  lastRun: null,           // run summary returned by POST /api/export
+  // which clients go into this run. Empty = nothing picked = export disabled
+  // (you never want literally every client; and the same client typed two
+  // ways shows as two names you can both tick).
+  selectedClients: [],
+  // Exports-history view: filter the run list to ones that included this client.
+  histClientFilter: null,  // string | null (null = show all runs)
+  histClientQuery: '',     // text in the history client autocomplete box
+  histClientOpen: false,   // is that autocomplete's suggestion popup open
+};
+
+function qp() { return new URLSearchParams(location.search); }
+function syncViewFromUrl() {
+  S.view = (qp().get('view') === 'history') ? 'history' : 'export';
+}
+
+/* ---------- data helpers ---------- */
+function entryMinutes(e) {
+  // dur is "H:MM"
+  const m = /^(\d+):(\d{2})$/.exec(String(e.dur || '0:00'));
+  return m ? (parseInt(m[1],10)*60 + parseInt(m[2],10)) : 0;
+}
+function unexportedEntries() { return S.entries.filter(e => !e.locked); }
+// distinct clients that have un-exported entries in the current range
+function clientsInScope() {
+  return [...new Set(unexportedEntries().map(e => e.client))]
+    .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+}
+function isClientPicked(c) { return S.selectedClients.includes(c); }
+// the entries that would actually go into the run: un-exported, in range, AND
+// belonging to a picked client
+function entriesToExport() {
+  return unexportedEntries().filter(e => S.selectedClients.includes(e.client));
+}
+// drop picks that are no longer in scope (e.g. after a range change)
+function prunePicks() {
+  const live = new Set(clientsInScope());
+  S.selectedClients = S.selectedClients.filter(c => live.has(c));
+}
+function clientStats(c) {
+  const rows = unexportedEntries().filter(e => e.client === c);
+  let billMin = 0; for (const e of rows) if (e.billable) billMin += entryMinutes(e);
+  return { entries: rows.length, billHours: billMin / 60 };
+}
+function scopeSummary() {
+  const rows = entriesToExport();
+  let billMin = 0;
+  for (const e of rows) if (e.billable) billMin += entryMinutes(e);
+  return {
+    entries: rows.length,
+    hours: billMin / 60,
+    clients: S.selectedClients.length,
+    engagements: new Set(rows.map(e => e.client + '∷' + e.engagement)).size,
+  };
+}
+function rollup(rows) {
+  const map = new Map();
+  for (const e of rows) {
+    const key = e.client + '∷' + e.engagement;
+    let r = map.get(key);
+    if (!r) { r = { client:e.client, engagement:e.engagement, entries:0, mins:0, bmins:0 }; map.set(key, r); }
+    r.entries += 1; r.mins += entryMinutes(e); if (e.billable) r.bmins += entryMinutes(e);
+  }
+  return [...map.values()].sort((a,b) =>
+    a.client.toLowerCase().localeCompare(b.client.toLowerCase()) ||
+    a.engagement.toLowerCase().localeCompare(b.engagement.toLowerCase()));
+}
+
+async function apiJson(url, opts) {
+  const resp = await fetch(url, opts);
+  let data = null; try { data = await resp.json(); } catch {}
+  if (!resp.ok) { const e = new Error((data && data.error) || ('server returned ' + resp.status)); e.status = resp.status; throw e; }
+  return data;
+}
+
+async function loadEntries() {
+  S.loading = true; S.loadError = null; render();
+  try {
+    const data = await apiJson('/api/entries?range=' + encodeURIComponent(S.range));
+    S.entries = Array.isArray(data) ? data : [];
+    prunePicks();
+    S.phase = unexportedEntries().length === 0 ? 'empty' : 'ready';
+    S.exportError = null;
+  } catch (err) {
+    S.entries = []; S.loadError = err.message || 'could not reach the app';
+  }
+  S.loading = false; render();
+}
+async function loadExports() {
+  try {
+    const data = await apiJson('/api/exports');
+    S.exports = Array.isArray(data) ? data : [];
+  } catch (err) { S.exports = []; }
+}
+async function openReport(runId) {
+  S.view = 'report'; S.reportRun = null; S.reportError = null; render();
+  try { S.reportRun = await apiJson('/api/exports/' + encodeURIComponent(runId)); }
+  catch (err) { S.reportError = err.message || 'could not load that run'; }
+  render(); window.scrollTo(0, 0);
+}
+
+async function doExport() {
+  if (entriesToExport().length === 0 || S.selectedClients.length === 0) return;
+  S.phase = 'exporting'; S.exportError = null; render();
+  try {
+    const run = await apiJson('/api/export', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ range: S.range, clients: S.selectedClients }),
+    });
+    S.lastRun = run; S.phase = 'done';
+    // hop straight to Exports history so the run, its CSV/PDF, and where they
+    // landed are right there in front of you (the new run sorts to the top).
+    await loadExports();
+    S.view = 'history';
+    history.replaceState(null, '', '/export?view=history');
+    render(); window.scrollTo(0, 0);
+  } catch (err) {
+    S.phase = 'error'; S.exportError = err.message || 'export failed'; render();
+  }
+}
+
+async function revealExports() {
+  try { await apiJson('/api/reveal-exports', { method:'POST' }); }
+  catch (err) { window.alert('Could not open the exports folder: ' + (err.message || 'something went wrong') + '\n\nIt lives at:  %USERPROFILE%\\TimeTracker\\exports'); }
+}
+
+async function voidExport(runId) {
+  const run = S.exports.find(r => r.run_id === runId);
+  const n = (run && run.totals && run.totals.entries) || 0;
+  const ok = window.confirm(
+    'Void export ' + runId + '?\n\n' +
+    'The CSV / PDF and this history row stay — it remains a paper trail — but the ' +
+    n + ' entr' + (n === 1 ? 'y' : 'ies') + ' it covers will be unlocked, so you can edit or re-export them. ' +
+    'This is the offsetting entry against the export; it can’t be undone.');
+  if (!ok) return;
+  try {
+    await apiJson('/api/exports/' + encodeURIComponent(runId) + '/void', { method:'POST' });
+    if (S.lastRun && S.lastRun.run_id === runId) S.lastRun = null;
+    await loadExports(); render();
+  } catch (err) {
+    window.alert('Could not void that export: ' + (err.message || 'something went wrong'));
+  }
+}
+
+/* ---------- shared fragments ---------- */
+function chrome(activeTab) {
+  const tab = (key, label, href) =>
+    `<a class="eb-tab" data-on="${activeTab === key ? '1' : '0'}" href="${href}">${label}</a>`;
+  return `
+    <header class="eb-chrome">
+      <div class="eb-brand">
+        <div class="eb-mark" aria-hidden="true"></div>
+        <div class="eb-bname"><b>Time&nbsp;Tracker</b><span>v0.3</span></div>
+      </div>
+      <nav class="eb-tabs" role="tablist">
+        ${tab('recorded', 'Recorded Time', '/')}
+        ${tab('export', 'Export', '/export')}
+        ${tab('history', 'Exports history', '/export?view=history')}
+      </nav>
+      <div class="eb-spacer"></div>
+      <div class="eb-conn"><span class="eb-dot"></span><span>connected · local</span></div>
+    </header>`;
+}
+function pageHead({ title, sub, runId, back }) {
+  return `
+    ${back ? `<div style="padding:4px 0 14px"><a class="eb-back" href="${back.href}" data-act="${back.act||''}"><span style="font-size:14px;line-height:1">←</span> ${esc(back.label)}</a></div>` : ''}
+    <div class="eb-pagehead">
+      <div>
+        <h1>${esc(title)}</h1>
+        <div class="eb-sub">${sub}</div>
+      </div>
+      ${runId ? `<div class="eb-runid">${runId}</div>` : ''}
+    </div>`;
+}
+function sectionHead({ num, title, sub, right }) {
+  return `
+    <div class="eb-sec-head">
+      <div class="eb-sec-num">${esc(num)}</div>
+      <div class="eb-sec-titlewrap">
+        <h2>${esc(title)}</h2>
+        ${sub ? `<div class="eb-sec-sub">${sub}</div>` : ''}
+      </div>
+      ${right ? `<div class="eb-sec-right">${right}</div>` : ''}
+    </div>`;
+}
+function rangePicker() {
+  return Object.entries(RANGE_LABELS).map(([k, lbl]) =>
+    `<div class="eb-pill" data-on="${S.range === k ? '1':'0'}" data-act="set-range" data-range="${k}">${esc(lbl)}</div>`).join('');
+}
+
+/* ---------- Scope section ---------- */
+function clientPicker() {
+  if (S.loadError) return `<div class="eb-kv" style="color:var(--bad)">couldn’t read recorded time</div>`;
+  const all = clientsInScope();
+  if (all.length === 0) {
+    return `<div class="eb-kv" style="color:var(--ink-3)">no un-exported entries in this range — nothing to pick</div>`;
+  }
+  const chips = all.map(c => {
+    const on = isClientPicked(c);
+    const st = clientStats(c);
+    return `<button class="eb-pick eb-clientchip${on ? ' eb-on' : ''}" data-act="toggle-client" data-client="${esc(c)}" title="${st.entries} entr${st.entries===1?'y':'ies'} · ${fmtH(st.billHours)}h billable">` +
+      `<span class="eb-box">${on ? '✓' : ''}</span>${esc(c)}<span class="eb-n">${st.entries}</span></button>`;
+  }).join('');
+  const n = S.selectedClients.length, allOn = n === all.length;
+  return `
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">${chips}</div>
+    <div style="margin-top:11px;display:flex;gap:16px;align-items:baseline;flex-wrap:wrap">
+      <span class="eb-kv"><b>${n}</b> of ${all.length} client${all.length===1?'':'s'} selected</span>
+      <button class="eb-btn eb-btn-link" data-act="${allOn ? 'clear-clients' : 'select-all-clients'}">${allOn ? 'Clear all' : 'Select all'}</button>
+      ${n > 0 && !allOn ? `<button class="eb-btn eb-btn-link" data-act="clear-clients" style="color:var(--ink-3)">Clear</button>` : ''}
+      <span class="eb-kv" style="color:var(--ink-4)">Same client typed two ways? Tick both — they roll up as separate lines.</span>
+    </div>`;
+}
+function scopeSection() {
+  const s = scopeSummary();
+  const totalInScope = unexportedEntries().length;
+  const liveLabel = S.loadError ? 'couldn’t read recorded time'
+    : (totalInScope === 0 ? 'no un-exported entries in this range'
+       : (S.selectedClients.length === 0 ? 'pick at least one client to enable Export'
+          : `${s.entries} of ${totalInScope} in-range entries selected`));
+  return `
+  <section class="eb-sec">
+    ${sectionHead({ num:'01', title:'Scope', sub:'A run covers the entries that are in this date range, not already exported, and belong to a client you pick below.' })}
+    <div class="eb-sec-body">
+      <div class="eb-tt" style="margin-bottom:8px">Date range</div>
+      <div class="eb-pillrow">${rangePicker()}</div>
+      <hr class="eb-rule" style="margin:18px 0 14px"/>
+      <div class="eb-tt" style="margin-bottom:8px">Clients in this run</div>
+      ${clientPicker()}
+    </div>
+    <div class="eb-summary">
+      <div class="eb-c"><b>${s.entries}</b><span>entries in this run</span></div>
+      <div class="eb-c"><b>${fmtH(s.hours)}<span style="font-size:.58em;margin-left:2px;color:var(--ink-4)">h</span></b><span>billable hours</span></div>
+      <div class="eb-c"><b>${s.clients}</b><span>client${s.clients===1?'':'s'} picked</span></div>
+      <div class="eb-c"><b>${s.engagements}</b><span>engagements</span></div>
+      <div class="eb-c" style="margin-left:auto;flex:1;align-items:flex-end">
+        <b style="font-size:13px;color:var(--ink-3);letter-spacing:.02em">${esc(liveLabel)}</b>
+        <span>updates as you change scope</span>
+      </div>
+    </div>
+  </section>`;
+}
+
+/* ---------- Preview / rollup section ---------- */
+function previewSection() {
+  const picked = entriesToExport();         // exactly what the run will contain
+  const roll = rollup(picked);
+  const nothingPicked = S.selectedClients.length === 0;
+  const totEntries = roll.reduce((a,r) => a+r.entries, 0);
+  const totMins = roll.reduce((a,r) => a+r.mins, 0);
+  const totB = roll.reduce((a,r) => a+r.bmins, 0);
+
+  const rollRows = roll.map(r => `
+      <tr>
+        <td class="eb-mono eb-cell-link"><button class="eb-cellbtn" data-act="toggle-client" data-client="${esc(r.client)}" title="remove ${esc(r.client)} from this run">${esc(r.client)}</button></td>
+        <td><span style="color:var(--ink-3)">${esc(r.engagement)}</span></td>
+        <td class="eb-num">${r.entries}</td>
+        <td class="eb-num">${fmtH(r.mins/60)}</td>
+        <td class="eb-num">${fmtH(r.bmins/60)}</td>
+      </tr>`).join('');
+  const rollEmpty = `<tr><td colspan="5"><div class="eb-empty" style="padding:28px 0"><div class="eb-bigtt">${nothingPicked ? 'no clients picked yet' : 'nothing in scope'}</div><p>${nothingPicked
+      ? 'Tick one or more clients in the Scope section above — their entries appear here, and that’s exactly what the CSV / PDF will contain.'
+      : 'No un-exported entries for the picked client(s) in this range. Try a wider range, or different clients.'}</p></div></td></tr>`;
+  const rollTable = `
+    <table class="eb-table">
+      <thead><tr>
+        <th style="width:30%">Client</th><th>Engagement</th>
+        <th style="text-align:right;width:90px">Entries</th>
+        <th style="text-align:right;width:90px">Hours</th>
+        <th style="text-align:right;width:110px">Billable h</th>
+      </tr></thead>
+      <tbody>
+        ${rollRows || rollEmpty}
+        ${roll.length ? `<tr class="eb-tot"><td>Totals · billable</td><td style="color:var(--ink-3)">${roll.length} engagement${roll.length===1?'':'s'} · ${S.selectedClients.length} client${S.selectedClients.length===1?'':'s'}</td><td class="eb-num">${totEntries}</td><td class="eb-num">${fmtH(totMins/60)}</td><td class="eb-num">${fmtH(totB/60)}</td></tr>` : ''}
+      </tbody>
+    </table>`;
+
+  const detailRows = picked.map(e => `
+      <tr>
+        <td class="eb-mono">${esc(e.date)}</td>
+        <td class="eb-mono eb-cell-link"><button class="eb-cellbtn" data-act="toggle-client" data-client="${esc(e.client)}" title="remove ${esc(e.client)} from this run">${esc(e.client)}</button></td>
+        <td><span style="color:var(--ink-3)">${esc(e.engagement)}</span></td>
+        <td class="eb-num">${(entryMinutes(e)/60).toFixed(2)}</td>
+        <td><span class="eb-narr" title="${esc(e.narrative)}">${esc(e.narrative || '—')}</span></td>
+        <td><span class="eb-bill${e.billable ? ' eb-on' : ''}"><span class="eb-dot"></span>${e.billable ? 'billable' : 'non-billable'}</span></td>
+      </tr>`).join('');
+  const billMin = picked.reduce((a,e) => a + (e.billable ? entryMinutes(e) : 0), 0);
+  const detailTable = `
+    <table class="eb-table">
+      <thead><tr>
+        <th style="width:96px">Date</th><th>Client</th><th>Engagement</th>
+        <th style="text-align:right;width:80px">Hours</th><th>Narrative</th><th style="width:120px">Billable</th>
+      </tr></thead>
+      <tbody>
+        ${detailRows || `<tr><td colspan="6"><div class="eb-empty" style="padding:28px 0"><div class="eb-bigtt">${nothingPicked ? 'no clients picked yet' : 'nothing matches'}</div><p>${nothingPicked ? 'Pick clients in the Scope section above.' : 'No entries for the picked client(s) in this range.'}</p></div></td></tr>`}
+        <tr class="eb-tot">
+          <td>In this run · billable</td>
+          <td colspan="2" style="color:var(--ink-3)">${picked.length} ${picked.length===1?'entry':'entries'} · ${S.selectedClients.length} ${S.selectedClients.length===1?'client':'clients'}</td>
+          <td class="eb-num">${fmtH(billMin/60)}</td><td colspan="2"></td>
+        </tr>
+      </tbody>
+    </table>`;
+
+  return `
+  <section class="eb-sec">
+    ${sectionHead({ num:'02', title:'Billing summary preview',
+      sub:`One row per client · engagement — the shape the exported CSV and PDF take. ${roll.length ? `<b style="color:var(--ink)">${roll.length}</b> engagement line${roll.length===1?'':'s'} from <b style="color:var(--ink)">${picked.length}</b> entries.` : 'Pick clients in the Scope section to fill this in.'}`,
+      right: roll.length ? `<span class="eb-kv">click a client to take it out of this run</span>` : '' })}
+    <div class="eb-sec-body" style="padding-top:0">
+      ${rollTable}
+      <hr class="eb-rule" style="margin:20px 0 14px"/>
+      <div class="eb-tt" style="margin-bottom:8px">Entries in this run</div>
+      ${detailTable}
+    </div>
+  </section>`;
+}
+
+/* ---------- Action bar (export flow) ---------- */
+function actionBar() {
+  const s = scopeSummary();
+  const wrap = (inner) => `<div class="eb-actionbar"><div class="eb-actionbar-inner">${inner}</div></div>`;
+  if (S.loadError) {
+    return wrap(`
+      <div class="eb-recap"><div class="eb-title" style="color:var(--bad)">Couldn’t read recorded time</div>
+        <div class="eb-sub">${esc(S.loadError)} — make sure Time Tracker is running.</div></div>
+      <div class="eb-cta"><button class="eb-btn eb-btn-primary" data-act="reload">Retry</button></div>`);
+  }
+  if (S.phase === 'exporting') {
+    return wrap(`
+      <div class="eb-recap" style="min-width:260px">
+        <div class="eb-title"><span class="eb-spin"></span> &nbsp;Building summary…</div>
+        <div class="eb-sub">Rolling ${s.entries} entries up by client · engagement and writing the CSV + PDF. Safe to leave this open.</div>
+      </div>
+      <div class="eb-progress">
+        <div class="eb-progress-bar"><i style="width:65%"></i></div>
+        <div class="eb-progress-text"><span>writing <span class="eb-now">${esc(RANGE_LABELS[S.range])}</span> rollup…</span></div>
+      </div>`);
+  }
+  if (S.phase === 'done' && S.lastRun) {
+    const r = S.lastRun, t = r.totals || {};
+    return wrap(`
+      <div class="eb-recap">
+        <div class="eb-title" style="color:var(--good)">✓ Summary ready · ${(r.rollup ? r.rollup.length : '?')} engagement line${(r.rollup && r.rollup.length===1)?'':'s'} · ${t.entries||0} entries</div>
+        <div class="eb-sub">Run <span class="eb-mono">${esc(r.run_id)}</span> · finished ${esc(r.created_at||'')} · saved to ~/TimeTracker/exports/${esc(r.run_id)}.{csv,pdf}</div>
+      </div>
+      <div class="eb-cta">
+        <a class="eb-btn" href="${esc(r.csv_url)}" download>Download CSV</a>
+        <a class="eb-btn eb-btn-primary" href="${esc(r.pdf_url)}" download>Download PDF</a>
+      </div>`);
+  }
+  if (S.phase === 'error') {
+    return wrap(`
+      <div class="eb-recap"><div class="eb-title" style="color:var(--bad)">Export failed</div>
+        <div class="eb-sub">${esc(S.exportError || 'something went wrong')}. Nothing was recorded — try again.</div></div>
+      <div class="eb-cta"><button class="eb-btn eb-btn-primary" data-act="export">Retry export</button></div>`);
+  }
+  if (unexportedEntries().length === 0) {
+    return wrap(`
+      <div class="eb-recap"><div class="eb-title" style="color:var(--ink-3)">Nothing to export</div>
+        <div class="eb-sub">No un-exported entries in this range. Pick a wider range — the button lights up once entries land in scope.</div></div>
+      <div class="eb-cta"><button class="eb-btn eb-btn-primary" disabled title="No un-exported entries in this range">Export 0 entries</button></div>`);
+  }
+  if (S.selectedClients.length === 0) {
+    return wrap(`
+      <div class="eb-recap"><div class="eb-title" style="color:var(--ink-3)">Pick the clients to include</div>
+        <div class="eb-sub">Tick one or more clients in the Scope section above. Export stays off until you do — you never want to bill every client at once.</div></div>
+      <div class="eb-cta"><button class="eb-btn eb-btn-primary" disabled title="Pick at least one client first">Export — pick clients first</button></div>`);
+  }
+  const nClients = S.selectedClients.length;
+  return wrap(`
+    <div class="eb-recap">
+      <div class="eb-title">Ready to export</div>
+      <div class="eb-sub">${s.entries} entr${s.entries===1?'y':'ies'} · ${fmtH(s.hours)}h billable · ${nClients} client${nClients===1?'':'s'} · scope ${esc(RANGE_LABELS[S.range])}</div>
+    </div>
+    <div class="eb-cta">
+      <button class="eb-btn eb-btn-primary" data-act="export">Export ${s.entries} entr${s.entries===1?'y':'ies'} from ${nClients} client${nClients===1?'':'s'} →</button>
+    </div>`);
+}
+
+function doneBanner() {
+  if (S.phase !== 'done' || !S.lastRun) return '';
+  const r = S.lastRun, t = r.totals || {};
+  return `
+    <div class="eb-banner eb-banner-good">
+      <div class="eb-icon">✓</div>
+      <div class="eb-body">
+        <div class="eb-title">Summary ready · ${(r.rollup ? r.rollup.length : '?')} engagement line${(r.rollup && r.rollup.length===1)?'':'s'} across ${t.clients||0} clients · ${t.entries||0} entries</div>
+        <p>Run <span class="eb-mono">${esc(r.run_id)}</span> closed at ${esc(r.created_at||'')}. CSV + PDF saved to <span class="eb-mono">~/TimeTracker/exports/${esc(r.run_id)}.*</span>. Those ${t.entries||0} entries are now locked on the Recorded Time page; this run is in Exports history.</p>
+      </div>
+      <div class="eb-actions"><a class="eb-btn" href="${esc(r.csv_url)}" download>Download CSV</a><a class="eb-btn eb-btn-primary" href="${esc(r.pdf_url)}" download>Download PDF</a></div>
+    </div>`;
+}
+
+/* ---------- page: Export ---------- */
+function exportPageHTML() {
+  if (S.loading && S.entries.length === 0 && !S.loadError) {
+    return `<div class="eb-root"><div class="eb-page">
+      ${chrome('export')}
+      ${pageHead({ title:'Export for billing', sub:'Loading recorded time…' })}
+      <section class="eb-sec"><div class="eb-sec-body"><div class="eb-empty"><div class="eb-bigtt">loading</div><p>Reading recorded time for ${esc(RANGE_LABELS[S.range])}…</p></div></div></section>
+    </div></div>`;
+  }
+  return `<div class="eb-root"><div class="eb-page">
+    ${chrome('export')}
+    ${pageHead({ title:'Export for billing', sub:'Take logged time and roll it up into a billing-ready summary at the client · engagement level. Generates a CSV and a PDF you can hand to a billing assistant.' })}
+    ${doneBanner()}
+    ${scopeSection()}
+    ${previewSection()}
+    ${actionBar()}
+  </div></div>`;
+}
+
+/* ---------- page: Exports history ---------- */
+function justExportedBanner() {
+  if (!S.lastRun) return '';
+  const r = S.lastRun, t = r.totals || {};
+  return `
+    <div class="eb-banner eb-banner-good">
+      <div class="eb-icon">✓</div>
+      <div class="eb-body">
+        <div class="eb-title">Exported · run <span class="eb-mono">${esc(r.run_id)}</span> · ${t.entries||0} entr${(t.entries===1)?'y':'ies'}</div>
+        <p>CSV + PDF saved to <button class="eb-cellbtn eb-mono" data-act="reveal-exports" style="color:var(--signal)" title="open this folder in File Explorer">~/TimeTracker/exports/ ↗</button> — download them below. Those ${t.entries||0} entries are now locked on the Recorded Time page. Changed your mind? <b>Void</b> the run on its row.</p>
+      </div>
+      <div class="eb-actions"><button class="eb-btn" data-act="reveal-exports">Open folder</button><a class="eb-btn" href="${esc(r.csv_url)}" download>Download CSV</a><a class="eb-btn eb-btn-primary" href="${esc(r.pdf_url)}" download>Download PDF</a></div>
+    </div>`;
+}
+// every distinct client that appears in any recorded run
+function allExportClients() {
+  const set = new Set();
+  for (const r of S.exports) for (const c of (r.clients || [])) set.add(c);
+  return [...set].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+}
+function visibleExports() {
+  if (S.histClientFilter == null) return S.exports;
+  return S.exports.filter(r => (r.clients || []).includes(S.histClientFilter));
+}
+function histClientPopupHTML() {
+  if (!S.histClientOpen || S.histClientFilter != null) return '';
+  const q = S.histClientQuery.trim().toLowerCase();
+  const matches = allExportClients().filter(c => !q || c.toLowerCase().includes(q));
+  if (!matches.length) {
+    return `<div class="eb-acpop"><div class="eb-acpop-empty">${S.histClientQuery.trim() ? `no client matches “${esc(S.histClientQuery.trim())}”` : 'no clients on record yet'}</div></div>`;
+  }
+  return `<div class="eb-acpop">${matches.map((c, i) =>
+    `<div class="eb-acpop-item${i === 0 ? ' active' : ''}" data-acpick="${esc(c)}">${esc(c)}</div>`).join('')}</div>`;
+}
+function historyFilterBar() {
+  if (S.exports.length === 0) return '';
+  const combo = (S.histClientFilter != null)
+    ? `<div class="eb-acwrap"><button class="eb-pick eb-clientchip eb-on" data-act="hist-clear-client" title="show all runs again"><span class="eb-box">✓</span>${esc(S.histClientFilter)} <span class="eb-x" style="font-size:13px;line-height:1;opacity:.8">✕</span></button></div>`
+    : `<div class="eb-acwrap"><div class="eb-input" style="width:240px"><span class="eb-tt">Client</span><input id="hist-client-input" placeholder="all clients" value="${esc(S.histClientQuery)}" autocomplete="off" spellcheck="false" /><span class="eb-caret">▾</span></div>${histClientPopupHTML()}</div>`;
+  const vis = visibleExports().length, tot = S.exports.length;
+  return `
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap">
+      <span class="eb-tt" style="color:var(--ink-3)">Filter</span>
+      ${combo}
+      <span class="eb-kv" style="color:var(--ink-4)">${S.histClientFilter != null ? `${vis} of ${tot} run${tot===1?'':'s'} include ${esc(S.histClientFilter)}` : 'start typing a client name, or pick from the list'}</span>
+    </div>`;
+}
+function historyHTML() {
+  const justId = S.lastRun ? S.lastRun.run_id : null;
+  const list = visibleExports();
+  const rows = list.map(r => {
+    const t = r.totals || {};
+    const isNew = justId && r.run_id === justId && !r.voided;
+    const cls = r.voided ? 'eb-row-voided' : (isNew ? 'eb-row-active' : '');
+    const status = r.voided
+      ? `<span class="eb-badge eb-bad" title="${r.voided_at ? 'voided ' + esc(r.voided_at) : 'voided'}"><span class="eb-glyph">⊘</span> voided</span>`
+      : `<span class="eb-badge eb-good"><span class="eb-glyph">✓</span> success${isNew ? ' · just now' : ''}</span>`;
+    const action = r.voided
+      ? `<span class="eb-kv" style="color:var(--ink-4)">${r.voided_at ? 'voided ' + esc(r.voided_at.replace(/ \d{2}:\d{2}:\d{2}$/, '')) : 'voided'}</span>`
+      : `<button class="eb-btn eb-btn-link" data-act="void-export" data-run="${esc(r.run_id)}" style="color:var(--bad)">Void</button>`;
+    return `
+    <tr class="${cls}">
+      <td class="eb-mono" style="color:var(--ink-3)">${esc(r.created_at || '')}</td>
+      <td style="color:var(--ink-2)">${esc(r.range_label || r.range || '')}</td>
+      <td><span style="color:var(--ink-3)" title="${(r.clients && r.clients.length) ? esc(r.clients.join(', ')) : 'all clients'}">${t.clients||0} client${(t.clients===1)?'':'s'} · ${t.engagements||0} eng</span></td>
+      <td class="eb-num">${t.entries||0}</td>
+      <td class="eb-num">${fmtH(t.billable_hours||0)}</td>
+      <td class="eb-mono" style="font-size:12.5px">${esc(r.run_id || '')}</td>
+      <td>${status}</td>
+      <td>
+        <a class="eb-btn eb-btn-link" href="${esc(r.csv_url)}" download>CSV</a>
+        &nbsp;·&nbsp;<a class="eb-btn eb-btn-link" href="${esc(r.pdf_url)}" download>PDF</a>
+        &nbsp;·&nbsp;<button class="eb-cellbtn" data-act="open-report" data-run="${esc(r.run_id)}" style="color:var(--signal)">report ↗</button>
+        &nbsp;·&nbsp;${action}
+      </td>
+    </tr>`;
+  }).join('');
+  const empty = S.exports.length === 0
+    ? `<tr><td colspan="8"><div class="eb-empty"><div class="eb-bigtt">no exports yet</div><h3>Nothing has been exported.</h3><p>Generate your first billing run from the <b>Export</b> tab — it’ll show up here with its CSV and PDF.</p></div></td></tr>`
+    : (list.length === 0
+        ? `<tr><td colspan="8"><div class="eb-empty"><div class="eb-bigtt">nothing matches</div><h3>No runs include “${esc(String(S.histClientFilter||''))}”.</h3><p><button class="eb-btn eb-btn-link" data-act="hist-clear-client">Clear the filter</button> to see every run.</p></div></td></tr>`
+        : '');
+  const countLbl = S.histClientFilter != null
+    ? `<span style="color:var(--ink-2)">${list.length} of ${S.exports.length} run${S.exports.length===1?'':'s'}</span>`
+    : (S.exports.length ? `<span style="color:var(--ink-2)">${S.exports.length} run${S.exports.length===1?'':'s'}</span>` : '');
+  return `<div class="eb-root"><div class="eb-page">
+    ${chrome('history')}
+    ${pageHead({ title:'Exports history', sub:'Every billing run, newest first. A paper trail you can hand to a partner — or an auditor. Void a run to back it out: the report stays, its entries unlock.', runId: countLbl })}
+    ${justExportedBanner()}
+    ${historyFilterBar()}
+    <section class="eb-sec">
+      <div class="eb-sec-head">
+        <div class="eb-sec-num">·</div>
+        <div class="eb-sec-titlewrap"><h2>${S.histClientFilter != null ? `Exports including ${esc(S.histClientFilter)}` : 'All exports'}</h2><div class="eb-sec-sub">click a row’s CSV / PDF to re-download, “report” for the read-only summary, or “Void” to back the run out</div></div>
+      </div>
+      <table class="eb-table">
+        <thead><tr>
+          <th style="width:170px">When</th><th>Range</th><th>Scope</th>
+          <th style="text-align:right;width:90px">Entries</th><th style="text-align:right;width:90px">Billable h</th>
+          <th style="width:170px">Run ID</th><th style="width:110px">Status</th><th style="width:240px">Files</th>
+        </tr></thead>
+        <tbody>${rows}${empty}</tbody>
+      </table>
+    </section>
+  </div></div>`;
+}
+
+/* ---------- page: read-only report ---------- */
+function reportHTML() {
+  if (S.reportError) {
+    return `<div class="eb-root"><div class="eb-page">
+      ${chrome('history')}
+      ${pageHead({ title:'Export run', sub:'', back:{ href:'/export?view=history', label:'Back to Exports history', act:'back-history' } })}
+      <div class="eb-banner eb-banner-bad"><div class="eb-icon">!</div><div class="eb-body"><div class="eb-title">Couldn’t load this run</div><p>${esc(S.reportError)}</p></div></div>
+    </div></div>`;
+  }
+  if (!S.reportRun) {
+    return `<div class="eb-root"><div class="eb-page">${chrome('history')}${pageHead({ title:'Export run', sub:'Loading…', back:{ href:'/export?view=history', label:'Back', act:'back-history' } })}<section class="eb-sec"><div class="eb-sec-body"><div class="eb-empty"><div class="eb-bigtt">loading</div></div></div></section></div></div>`;
+  }
+  const r = S.reportRun, t = r.totals || {};
+  const voided = !!r.voided;
+  const rollRows = (r.rollup || []).map(line => `
+    <tr>
+      <td>${esc(line.client)}</td>
+      <td style="color:var(--ink-2)">${esc(line.engagement)}</td>
+      <td class="eb-num">${line.entries}</td>
+      <td class="eb-num">${fmtH(line.hours)}</td>
+      <td class="eb-num">${fmtH(line.billable_hours)}</td>
+    </tr>`).join('');
+  const headBanner = voided
+    ? `<div class="eb-banner eb-banner-warn">
+        <div class="eb-icon">⊘</div>
+        <div class="eb-body">
+          <div class="eb-title">This export was voided${r.voided_at ? ' on ' + esc(r.voided_at) : ''}</div>
+          <p>It stays here as a paper trail, and the CSV / PDF below are still the snapshot generated on ${esc(r.created_at || '')} — but it no longer counts: the ${t.entries||0} entr${(t.entries===1)?'y':'ies'} it covered are unlocked again and can be re-exported. The downloads below are kept for the record.</p>
+        </div>
+        <div class="eb-actions"><a class="eb-btn" href="${esc(r.csv_url)}" download>Download CSV</a><a class="eb-btn" href="${esc(r.pdf_url)}" download>Download PDF</a></div>
+      </div>`
+    : `<div class="eb-banner eb-banner-good">
+        <div class="eb-icon">✓</div>
+        <div class="eb-body">
+          <div class="eb-title">${(r.rollup||[]).length} engagement line${((r.rollup||[]).length===1)?'':'s'} across ${t.clients||0} clients · ${t.entries||0} entries · ${fmtH(t.billable_hours||0)}h billable</div>
+          <p>Scope <b>${esc(r.range_label || r.range || '')}</b>. Snapshot of what was generated on ${esc(r.created_at || '')}. Source entries may have changed since — if so, generate a new run from the Export tab.</p>
+        </div>
+        <div class="eb-actions"><a class="eb-btn" href="${esc(r.csv_url)}" download>Download CSV</a><a class="eb-btn eb-btn-primary" href="${esc(r.pdf_url)}" download>Download PDF</a></div>
+      </div>`;
+  return `<div class="eb-root"><div class="eb-page">
+    ${chrome('history')}
+    ${pageHead({ title:`Billing summary — ${esc(r.range_label || r.range || '')}`, sub:'Read-only view of a run that already happened. Re-downloading the CSV or PDF here does not create a new run — the paper trail stays one row.', runId:`${voided ? 'VOIDED' : 'COMPLETE'} · ${esc(r.created_at || '')} · ${esc(r.run_id)}`, back:{ href:'/export?view=history', label:'Back to Exports history', act:'back-history' } })}
+    ${headBanner}
+    <section class="eb-sec">
+      ${sectionHead({ num:'·', title:'Run metadata', sub:'Recorded at the time of export.' })}
+      <div class="eb-sec-body"><div class="eb-row-flex" style="gap:48px">
+        <div><div class="eb-tt">Run ID</div><div class="eb-mono" style="margin-top:6px">${esc(r.run_id)}</div></div>
+        <div><div class="eb-tt">When</div><div class="eb-mono" style="margin-top:6px">${esc(r.created_at || '')}</div></div>
+        <div><div class="eb-tt">Range</div><div style="margin-top:6px">${esc(r.range_label || r.range || '')}</div></div>
+        <div style="max-width:360px"><div class="eb-tt">Clients</div><div style="margin-top:6px">${(r.clients && r.clients.length) ? r.clients.map(esc).join(', ') : '<span style="color:var(--ink-4)">all</span>'}</div></div>
+        <div><div class="eb-tt">Entries</div><div class="eb-mono" style="margin-top:6px">${t.entries||0}</div></div>
+        <div><div class="eb-tt">Status</div><div style="margin-top:6px">${voided
+          ? `<span class="eb-badge eb-bad"><span class="eb-glyph">⊘</span> voided${r.voided_at ? ' · ' + esc(r.voided_at) : ''}</span>`
+          : `<span class="eb-badge eb-good"><span class="eb-glyph">✓</span> success</span>`}</div></div>
+      </div></div>
+    </section>
+    <section class="eb-sec">
+      ${sectionHead({ num:'·', title:'Billing summary', sub:'The engagement-level rollup as it was generated. Re-downloads regenerate the file — they don’t create a new run.' })}
+      <div class="eb-sec-body"><table class="eb-table">
+        <thead><tr><th style="width:30%">Client</th><th>Engagement</th><th style="text-align:right;width:90px">Entries</th><th style="text-align:right;width:90px">Hours</th><th style="text-align:right;width:110px">Billable h</th></tr></thead>
+        <tbody>
+          ${rollRows}
+          <tr class="eb-tot"><td>Totals · billable</td><td style="color:var(--ink-3)">${(r.rollup||[]).length} engagements · ${t.clients||0} clients</td><td class="eb-num">${t.entries||0}</td><td class="eb-num">${fmtH(t.hours||0)}</td><td class="eb-num">${fmtH(t.billable_hours||0)}</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+    <div class="eb-actionbar"><div class="eb-actionbar-inner">
+      <div class="eb-recap"><div class="eb-title">Re-download this report</div><div class="eb-sub">Regenerates the same CSV / PDF from disk. No new history row.</div></div>
+      <div class="eb-cta">
+        <a href="/export?view=history" class="eb-back" data-act="back-history" style="margin-right:8px">← Back to Exports history</a>
+        <a class="eb-btn" href="${esc(r.csv_url)}" download>Download CSV</a>
+        <a class="eb-btn eb-btn-primary" href="${esc(r.pdf_url)}" download>Download PDF</a>
+      </div>
+    </div></div>
+  </div></div>`;
+}
+
+/* ---------- router + wiring ---------- */
+function render() {
+  const root = $root();
+  if (S.view === 'history') root.innerHTML = historyHTML();
+  else if (S.view === 'report') root.innerHTML = reportHTML();
+  else root.innerHTML = exportPageHTML();
+  wire();
+}
+
+function wire() {
+  const root = $root();
+  root.querySelectorAll('[data-act]').forEach((el) => {
+    el.addEventListener('click', (ev) => {
+      const act = el.dataset.act;
+      if (!act) return;
+      ev.preventDefault();
+      if (el.tagName === 'A' && (act === '' )) return;
+      switch (act) {
+        case 'set-range':
+          if (S.range !== el.dataset.range) {
+            S.range = el.dataset.range;          // selectedClients get pruned to what's still in scope by loadEntries
+            S.phase = 'ready'; S.lastRun = null; S.exportError = null;
+            loadEntries();
+          }
+          break;
+        case 'reload': loadEntries(); break;
+        case 'export': doExport(); break;
+        case 'toggle-client': {
+          const c = el.dataset.client;
+          const i = S.selectedClients.indexOf(c);
+          if (i >= 0) S.selectedClients.splice(i, 1); else S.selectedClients.push(c);
+          render(); break;
+        }
+        case 'select-all-clients': S.selectedClients = clientsInScope(); render(); break;
+        case 'clear-clients': S.selectedClients = []; render(); break;
+        case 'open-report': openReport(el.dataset.run); break;
+        case 'void-export': voidExport(el.dataset.run); break;
+        case 'reveal-exports': revealExports(); break;
+        case 'hist-clear-client':
+          S.histClientFilter = null; S.histClientQuery = ''; S.histClientOpen = false; render();
+          break;
+        case 'back-history':
+          S.view = 'history'; history.replaceState(null, '', '/export?view=history');
+          loadExports().then(render); window.scrollTo(0, 0);
+          break;
+        default: break;
+      }
+    });
+  });
+  bindHistCombo(root);
+}
+
+/* the Exports-history client autocomplete: bind the suggestion items + the
+   text input. Suggestion items use data-acpick (not data-act) so the generic
+   click loop above leaves them alone — we wire them here, and again after each
+   surgical popup re-render while the user types. */
+function bindHistPopupItems(root) {
+  root.querySelectorAll('.eb-acpop [data-acpick]').forEach((it) => {
+    it.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      S.histClientFilter = it.dataset.acpick; S.histClientQuery = ''; S.histClientOpen = false; render();
+    });
+  });
+}
+function bindHistCombo(root) {
+  bindHistPopupItems(root);
+  const inp = root.querySelector('#hist-client-input');
+  if (!inp) return;
+  inp.addEventListener('focus', () => {
+    if (!S.histClientOpen) {
+      S.histClientOpen = true; render();
+      const i = $root().querySelector('#hist-client-input');
+      if (i) { i.focus(); try { i.setSelectionRange(i.value.length, i.value.length); } catch {} }
+    }
+  });
+  inp.addEventListener('input', () => {
+    S.histClientQuery = inp.value;
+    const wrap = inp.closest('.eb-acwrap'); if (!wrap) return;
+    const old = wrap.querySelector('.eb-acpop');
+    const html = histClientPopupHTML();
+    if (old) old.outerHTML = html;
+    else if (html) wrap.insertAdjacentHTML('beforeend', html);
+    bindHistPopupItems(root);
+  });
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); S.histClientOpen = false; render(); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      const q = S.histClientQuery.trim().toLowerCase();
+      const m = allExportClients().filter(c => !q || c.toLowerCase().includes(q));
+      if (m.length) { S.histClientFilter = m[0]; S.histClientQuery = ''; S.histClientOpen = false; render(); }
+    }
+  });
+}
+
+/* keep a mousedown inside a suggestion popup from blurring the input (so the
+   click lands), and let a mousedown anywhere else dismiss an open popup. */
+document.addEventListener('mousedown', (e) => {
+  if (e.target.closest('.eb-acpop')) { e.preventDefault(); return; }
+  if (S.histClientOpen && !e.target.closest('.eb-acwrap')) { S.histClientOpen = false; render(); }
+});
+
+/* ---------- boot ---------- */
+syncViewFromUrl();
+render();
+if (S.view === 'history') { loadExports().then(render); }
+else { loadEntries(); }
+window.addEventListener('focus', () => {
+  if (S.view === 'export' && S.phase !== 'exporting') loadEntries();
+  else if (S.view === 'history') loadExports().then(render);
+});
+})();
+</script>
+</body>
+</html>

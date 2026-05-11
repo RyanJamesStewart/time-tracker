@@ -1,0 +1,114 @@
+[package]
+name = "time-tracker"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Hotkey-driven time tracker"
+publish = false
+
+[[bin]]
+name = "time-tracker"
+path = "src/main.rs"
+
+# live-view: localhost HTTP+WebSocket server (axum + tokio) so a browser page
+# at http://localhost:17893 reacts in real time to hotkey / timer events. OFF
+# by default - the no-feature build (and the signed Wednesday MSIX, if this
+# integration isn't solid) pulls zero new deps and is byte-identical to the
+# tray-only app. Build with: cargo xwin build --release --features live-view ...
+[features]
+live-view = ["dep:tokio", "dep:axum", "dep:futures-util", "dep:wry", "dep:printpdf"]
+
+[[bin]]
+name = "smoke-hotkey"
+path = "src/bin/smoke_hotkey.rs"
+
+# csv-lock-smoke: SPEC §4.1 retry-path validator. Driven by
+# scripts/test-excel-lock.ps1 to exercise lock-retry + queue-fallback.
+[[bin]]
+name = "csv-lock-smoke"
+path = "src/bin/csv_lock_smoke.rs"
+
+# Lib-only deps (compile on every target so `cargo test --lib` runs in WSL).
+[dependencies]
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+directories = "5"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Windows-only GUI / IPC stack — the bins (main.rs, popup.rs, smoke_hotkey.rs)
+# are #[cfg(windows)]-gated so non-Windows targets get a stub main only.
+# Pulling these out of the cross-target deps keeps `cargo test --lib
+# --target x86_64-unknown-linux-gnu` from dragging in GTK/X11/etc.
+#
+# V2: tilde-pin Tauri-ecosystem + winit + windows-sys versions because
+# Microsoft and the Tauri maintainers both break API surface between
+# minor versions. Cargo.lock is committed so today is fine; tilde
+# protects against `cargo update` six months out per
+# `pane-windows-vs-windows-sys-rust.md` and the R1 auto-repeat scar in
+# `pane-registerhotkey-global-hotkeys.md`.
+[target.'cfg(windows)'.dependencies]
+global-hotkey = "~0.6"
+winit = { version = "~0.29", features = ["rwh_06"] }
+tray-icon = "~0.20"
+egui = "~0.27"
+egui_glow = { version = "~0.27", features = ["winit"] }
+egui-winit = "~0.27"
+glow = "~0.13"
+glutin = "~0.31"
+glutin-winit = "~0.4"
+raw-window-handle = "~0.5"
+windows-sys = { version = "~0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+] }
+
+# Optional — only compiled in when `--features live-view`. tokio "full" is
+# heavier than strictly needed but avoids feature-puzzle build errors for a
+# demo; axum 0.7 (pinned <0.8 — 0.8 changed path-param syntax) with the ws
+# feature; futures-util for the Sink/Stream traits on axum's WebSocket.
+tokio = { version = "1", optional = true, features = ["full"] }
+axum = { version = "0.7", optional = true, features = ["ws"] }
+futures-util = { version = "0.3", optional = true, default-features = false, features = ["sink"] }
+# v0.3: native tray-anchored popover window. wry wraps WebView2 (evergreen
+# runtime, ships with Win11) inside a winit Window via raw-window-handle 0.6.
+# Optional + behind `live-view` because the popover HTML is served by the
+# localhost server — no server, no window. cargo-xwin cross-compiles it fine
+# (pure-Rust COM bindings via the `windows` crate; xwin supplies the import libs).
+wry = { version = "0.45", optional = true }
+
+# Export PDF generation (the "Export for billing" → PDF artifact). Pure
+# Rust, no external font files — uses printpdf's built-in standard
+# Helvetica. Behind `live-view` because only the localhost server
+# generates the PDF. cargo-xwin cross-compiles it fine (no C deps).
+printpdf = { version = "0.7", optional = true, default-features = false }
+
+# B4: DPI manifest via embed-manifest (NOT winres — winres needs the
+# MSVC RC compiler that cargo-xwin doesn't ship; per
+# `pane-dpi-awareness-permonitorv2.md` § cargo-xwin specifics).
+#
+# Unconditional (not `[target.'cfg(windows)'.build-dependencies]`)
+# because build.rs runs on the HOST regardless of target — gating only
+# the build-dep on target=windows would break compile when the build.rs
+# `use embed_manifest::*` line is reached on a non-Windows target. The
+# Linux-target test (`cargo test --lib --target x86_64-unknown-linux-gnu`)
+# also needs the dep available. The crate is small and pure Rust.
+[build-dependencies]
+embed-manifest = "1.4"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+panic = "abort"

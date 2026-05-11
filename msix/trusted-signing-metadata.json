@@ -1,0 +1,6 @@
+{
+  "Endpoint": "https://eus.codesigning.azure.net/",
+  "CodeSigningAccountName": "ryanstewart-signing",
+  "CertificateProfileName": "public-trust",
+  "CorrelationId": "time-tracker"
+}

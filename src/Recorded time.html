@@ -1,0 +1,1123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Time Tracker · Recorded time</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<style>
+  /* ---------- Time Tracker visual system v0.3 (shared with live_view.html / Export for billing.html) ---------- */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #F2F3F1; }
+  .rt-root {
+    --paper:#F2F3F1; --paper-2:#ECEEEC; --panel:#FFFFFF;
+    --ink:#14171A; --ink-2:#3C434B; --ink-3:#6A727C; --ink-4:#9097A0;
+    --rule:#E1E4E6; --rule-2:#D2D7DB; --rule-strong:#BFC5CA;
+    --signal:#1361FF; --signal-soft:#DCE8FF; --signal-ink:#0A3FA8;
+    --good:#1E8A52; --warn:#B45309; --bad:#C0392B;
+    --sans:-apple-system, BlinkMacSystemFont, "Segoe UI","SF Pro Text", system-ui, "Helvetica Neue", Arial, sans-serif;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --shadow-1: 0 1px 0 rgba(20,23,26,.03), 0 1px 2px rgba(20,23,26,.04);
+    /* grid columns: lock · date · start · end · dur · client · eng · desc · bill · × */
+    --rt-cols: 36px 88px 78px 78px 72px 1.1fr 1fr 1.55fr 64px 28px;
+
+    font-family: var(--sans);
+    color: var(--ink); background: var(--paper);
+    font-size: 14px; line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "tnum";
+    background-image:
+      linear-gradient(to right,  rgba(20,23,26,.035) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(20,23,26,.035) 1px, transparent 1px);
+    background-size: 56px 56px;
+    width: 100%; min-height: 100%;
+    padding-bottom: 28px;
+    position: relative;
+  }
+  .rt-root, .rt-root * { box-sizing: border-box; }
+  body { background: var(--paper); }
+  .rt-page { max-width: 1240px; margin: 0 auto; }
+  .rt-mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .rt-lbl  { font-family: var(--mono); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-4); }
+
+  /* ---------- top chrome ---------- */
+  .rt-chrome { display:flex; align-items:center; gap:18px; padding: 14px 28px 0; }
+  .rt-brand  { display:flex; align-items:center; gap:12px; }
+  .rt-mark   { width:26px; height:26px; border-radius:7px; background:var(--ink);
+               display:grid; place-items:center; box-shadow: inset 0 0 0 1px rgba(255,255,255,.06); flex:0 0 auto; }
+  .rt-mark::before { content:""; width:8px; height:8px; background:var(--signal); border-radius:2px; box-shadow:0 0 0 2px var(--ink); }
+  .rt-bname  { display:flex; flex-direction:column; line-height:1.05; }
+  .rt-bname b { font-weight:600; font-size:15px; letter-spacing:-.005em; }
+  .rt-divider{ width:1px; height:28px; background:var(--rule); margin-left:6px; flex:0 0 auto; }
+  .rt-tabs   { display:flex; gap:4px; }
+  .rt-tab    { padding:8px 14px; font-size:13.5px; font-weight:500; color:var(--ink-3); letter-spacing:-.005em;
+               border-radius:7px; border:1px solid transparent; text-decoration:none; cursor:pointer; }
+  .rt-tab:hover { color:var(--ink-2); }
+  .rt-tab.on { font-weight:600; color:var(--ink); background:var(--panel); border-color:var(--rule); box-shadow:0 1px 0 rgba(20,23,26,.03); }
+  .rt-spacer { flex:1; }
+  .rt-conn   { display:inline-flex; align-items:center; gap:8px; padding:6px 12px; background:var(--panel);
+               border:1px solid var(--rule); border-radius:999px; font-family:var(--mono); font-size:11.5px; color:var(--ink-2); }
+  .rt-conn .rt-cdot { width:6px; height:6px; border-radius:50%; background:var(--good); box-shadow:0 0 0 4px rgba(30,138,82,.15); }
+
+  /* ---------- title ---------- */
+  .rt-titlewrap { padding: 20px 28px 14px; }
+  .rt-titlewrap .row1 { display:flex; align-items:baseline; gap:14px; }
+  .rt-titlewrap h1 { margin:0; font-size:26px; font-weight:600; letter-spacing:-.018em; }
+  .rt-titlewrap .sub { margin-top:6px; color:var(--ink-3); font-size:13.5px; max-width:720px; }
+
+  /* ---------- controls bar ---------- */
+  .rt-controls { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding: 0 28px 14px; }
+  .rt-seg { display:inline-flex; padding:3px; background:var(--panel); border:1px solid var(--rule);
+            border-radius:8px; box-shadow:0 1px 0 rgba(20,23,26,.03); }
+  .rt-seg-opt { padding:5px 11px; border-radius:6px; font-size:12.5px; color:var(--ink-3); letter-spacing:-.005em; cursor:pointer; user-select:none; }
+  .rt-seg-opt.on { background:var(--paper-2); color:var(--ink); font-weight:500; }
+  .rt-dd { display:inline-flex; align-items:center; gap:8px; padding:6px 11px 6px 12px; background:var(--panel);
+           border:1px solid var(--rule); border-radius:7px; min-height:30px; font-size:13px; color:var(--ink);
+           letter-spacing:-.005em; cursor:pointer; box-shadow:0 1px 0 rgba(20,23,26,.03); }
+  .rt-dd .v { color:var(--ink-4); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rt-dd .v.set { color:var(--ink); }
+  .rt-dd .ca { color:var(--ink-3); }
+  .rt-toggle { display:inline-flex; align-items:center; gap:9px; padding:6px 12px; background:var(--panel);
+               border:1px solid var(--rule); border-radius:7px; font-size:13px; color:var(--ink-2); cursor:pointer;
+               box-shadow:0 1px 0 rgba(20,23,26,.03); user-select:none; }
+  .rt-switch { position:relative; width:26px; height:14px; border-radius:999px; background:var(--rule-2); transition:background .2s; flex:0 0 auto; }
+  .rt-switch::after { content:""; position:absolute; top:1px; left:1px; width:12px; height:12px; border-radius:50%;
+               background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.18); transition:left .2s; }
+  .rt-toggle.on .rt-switch { background:var(--signal); }
+  .rt-toggle.on .rt-switch::after { left:13px; }
+  .rt-newbtn { display:inline-flex; align-items:center; gap:8px; background:var(--ink); color:#fff; border:none; border-radius:7px;
+               padding:8px 14px; font-weight:500; font-size:13.5px; letter-spacing:-.005em; cursor:pointer; font-family:var(--sans);
+               box-shadow:0 1px 0 rgba(0,0,0,.06), 0 6px 14px -6px rgba(20,23,26,.4); }
+  .rt-newbtn svg { display:block; }
+  .rt-newbtn[disabled] { opacity:.4; cursor:default; }
+
+  /* ---------- scope counters ---------- */
+  .rt-counters { display:flex; margin:0 28px 18px; background:var(--panel); border:1px solid var(--rule);
+                 border-radius:10px; box-shadow:0 1px 0 rgba(20,23,26,.03); overflow:hidden; }
+  .rt-counter  { flex:1; padding:14px 20px; border-left:1px solid var(--rule); }
+  .rt-counter:first-child { border-left:0; }
+  .rt-counter b { display:block; font-size:22px; font-weight:500; letter-spacing:-.012em; color:var(--ink);
+                  font-family:var(--mono); font-variant-numeric:tabular-nums; }
+  .rt-counter span { margin-top:2px; display:block; }
+
+  /* ---------- grid ---------- */
+  .rt-grid { margin:0 28px; background:var(--panel); border:1px solid var(--rule); border-radius:10px;
+             box-shadow:var(--shadow-1); overflow:hidden; }
+  .rt-head { display:grid; grid-template-columns:var(--rt-cols); gap:14px; align-items:center;
+             padding:12px 20px; background:linear-gradient(180deg,#FCFDFD,#F7F8F7); border-bottom:1px solid var(--rule); }
+  .rt-head .hc { display:flex; align-items:center; gap:6px; }
+  .rt-head .hc.sortable { cursor:pointer; }
+  .rt-head .hc svg { display:block; }
+
+  .rt-row { display:grid; grid-template-columns:var(--rt-cols); gap:14px; align-items:center;
+            padding:11px 20px; border-top:1px solid var(--rule); position:relative; }
+  .rt-grid > .rt-row:first-of-type { border-top:0; }
+  .rt-row.hover { background:var(--paper); }
+  .rt-row.editing { background:#FAFBFD; box-shadow: inset 3px 0 0 var(--signal); padding:8px 20px; }
+  .rt-row.newrow  { background:#F4F8FF; box-shadow: inset 3px 0 0 var(--signal);
+            border-top:1px solid rgba(19,97,255,.33); border-bottom:1px solid rgba(19,97,255,.33); padding:8px 20px; }
+  .rt-row.delrow  { background:#FBF7F2; box-shadow: inset 3px 0 0 var(--warn); }
+  .rt-row.locked  { background:#F6F7F6; }
+
+  .rt-cell { font-size:13.5px; color:var(--ink); letter-spacing:-.005em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rt-cell.mono { font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:12.5px; letter-spacing:.005em; }
+  .rt-cell.dim  { color:var(--ink-3); }
+  .rt-cell.dim2 { color:var(--ink-2); }
+  .rt-cell.strong { font-weight:500; }
+  .rt-cell.eng  { font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.12em; color:var(--ink-3); }
+  .rt-cell.click { cursor:text; border-radius:4px; }
+  .rt-cell.click:hover { background:rgba(19,97,255,.05); box-shadow:0 0 0 1px rgba(19,97,255,.18) inset; }
+  .rt-cell.click.eng:hover { background:rgba(19,97,255,.05); }
+  .rt-cell .rt-ph { color:var(--ink-4); font-style:italic; }   /* "Add notes…" affordance on an empty editable cell */
+  .rt-cellctr { display:flex; justify-content:center; }
+  .rt-cellend { display:flex; justify-content:flex-end; }
+
+  .rt-editcell { display:flex; align-items:center; background:var(--panel); border:1.5px solid var(--rule-2);
+            border-radius:5px; padding:4px 8px; min-height:26px; font-size:13.5px; color:var(--ink); }
+  .rt-editcell.time { font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:12.5px; }
+  .rt-editcell.focus { border-color:var(--signal); box-shadow:0 0 0 3px rgba(19,97,255,.12); }
+  .rt-editcell.ghost { color:var(--ink-4); }
+  /* the Notes cell expands to a 3-line box when clicked open (other cells stay single-line).
+     It does NOT auto-grab the caret — it reads as an expanded view (calm grey border, arrow
+     cursor) until you click *into* the text, at which point it becomes a live editor (blue
+     outline, text caret). That gets rid of the "click anywhere and type" expectation. */
+  .rt-editcell.multiline { align-items:stretch; padding:5px 8px; cursor:default; }
+  .rt-editcell.multiline.focus { border-color:var(--rule-2); box-shadow:none; }
+  .rt-editcell.multiline textarea { cursor:default; caret-color:transparent; }
+  .rt-editcell.multiline:focus-within { border-color:var(--signal); cursor:text; }
+  .rt-editcell.multiline:focus-within textarea { cursor:text; caret-color:var(--ink); }
+  .rt-editcell input, .rt-editcell textarea { flex:1; min-width:0; border:0; outline:0; background:transparent; font:inherit;
+            color:inherit; font-variant-numeric:inherit; }
+  .rt-editcell textarea { resize:none; line-height:1.4; }
+  .rt-editcell input::placeholder, .rt-editcell textarea::placeholder { color:var(--ink-4); }
+  .rt-row.editing.tall, .rt-row.newrow.tall { align-items:flex-start; }   /* top-align the other cells when Notes is multi-line */
+
+  .rt-bill { display:inline-flex; align-items:center; gap:6px; padding:2px 8px 2px 7px; background:rgba(19,97,255,.08);
+            border:1px solid rgba(19,97,255,.27); border-radius:999px; font-family:var(--mono); font-size:10.5px;
+            color:var(--signal-ink); letter-spacing:.02em; cursor:pointer; user-select:none; }
+  .rt-bill .d { width:6px; height:6px; border-radius:50%; background:var(--signal); box-shadow:0 0 0 2px rgba(19,97,255,.13); }
+  .rt-bill.dim { background:var(--paper); border-color:var(--rule); color:var(--ink-3); }
+  .rt-bill.dim .d { background:var(--ink-4); box-shadow:none; }
+  .rt-internal { display:inline-flex; align-items:center; padding:2px 8px; background:transparent; border:1px dashed var(--rule-2);
+            border-radius:999px; font-family:var(--mono); font-size:10.5px; color:var(--ink-4); letter-spacing:.02em; cursor:pointer; user-select:none; }
+  .rt-locked .rt-bill, .rt-locked .rt-internal { cursor:default; }
+
+  .rt-delx { width:22px; height:22px; border-radius:5px; display:grid; place-items:center; color:var(--ink-3);
+            cursor:pointer; background:transparent; border:0; }
+  .rt-delx:hover { background:var(--paper-2); color:var(--ink-2); }
+  .rt-delx svg { display:block; }
+  .rt-lockglyph { color:var(--ink-3); display:grid; place-items:center; cursor:pointer; }
+  .rt-lockglyph svg { display:block; }
+
+  .rt-strike { text-decoration:line-through; }
+  .rt-delask { grid-column: span 5; display:flex; align-items:center; gap:12px; }
+  .rt-delask .q { font-size:13px; color:var(--ink-2); }
+
+  .rt-btn { font-family:var(--sans); border-radius:6px; padding:5px 12px; font-size:12.5px; cursor:pointer; border:1px solid var(--rule-2);
+            background:var(--panel); color:var(--ink-2); }
+  .rt-btn:hover { border-color:var(--rule-strong); }
+  .rt-btn--bad  { background:var(--bad);  color:#fff; border-color:var(--bad);  font-weight:500; }
+  .rt-btn--warn { background:var(--warn); color:#fff; border-color:var(--warn); font-weight:500; box-shadow:0 6px 14px -6px rgba(180,83,9,.5); }
+  .rt-btn--ink  { background:var(--ink);  color:#fff; border-color:var(--ink);  font-weight:500; }
+
+  /* ---------- partial new-entry message ---------- */
+  .rt-partial { grid-column:1 / -1; margin-top:6px; padding:7px 12px; background:var(--panel);
+            border:1px dashed rgba(180,83,9,.33); border-radius:6px; color:var(--warn); font-size:12.5px;
+            display:flex; align-items:center; gap:8px; }
+  .rt-partial .hint { margin-left:auto; font-family:var(--mono); font-size:11px; color:var(--ink-4); }
+
+  /* ---------- footer ---------- */
+  .rt-footer { padding:14px 28px 22px; display:flex; align-items:center; gap:12px; }
+  .rt-footer-pill { display:inline-flex; align-items:center; gap:12px; padding:8px 16px; background:var(--panel);
+            border:1px solid var(--rule); border-radius:999px; box-shadow:0 1px 0 rgba(20,23,26,.03);
+            font-family:var(--mono); font-size:12px; color:var(--ink-2); }
+  .rt-footer-pill b { color:var(--ink); font-weight:500; }
+  .rt-footer-pill .sep { color:var(--ink-4); }
+  .rt-footer-pill .sc { color:var(--ink-3); letter-spacing:.02em; }
+  .rt-toast { display:inline-flex; align-items:center; gap:12px; padding:8px 14px; background:var(--ink); color:#fff;
+            border-radius:8px; font-size:13px; letter-spacing:-.005em; box-shadow:0 8px 22px -8px rgba(20,23,26,.4); }
+  .rt-toast .tl { font-family:var(--mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; opacity:.8; }
+  .rt-toast button { background:transparent; border:0; padding:0; color:#fff; font:inherit; cursor:pointer;
+            text-decoration:underline; text-underline-offset:3px; }
+  .rt-toast .tm { font-family:var(--mono); font-size:10.5px; color:rgba(255,255,255,.55); }
+
+  /* ---------- lock caption ---------- */
+  .rt-lockcap { margin:14px 28px 0; display:flex; align-items:center; gap:10px; color:var(--ink-3); font-size:12.5px; }
+  .rt-lockcap b { color:var(--ink-2); font-weight:500; }
+  .rt-lockcap .rt-mono { color:var(--ink-2); }
+
+  /* ---------- empty state ---------- */
+  .rt-empty { margin:0 28px; background:var(--panel); border:1px solid var(--rule); border-radius:10px;
+            box-shadow:0 1px 0 rgba(20,23,26,.03); padding:64px 24px 72px; text-align:center; }
+  .rt-empty-inner { display:inline-flex; flex-direction:column; align-items:center; gap:16px; max-width:480px; }
+  .rt-empty-icon { width:44px; height:44px; border-radius:10px; background:var(--paper); border:1px solid var(--rule);
+            display:grid; place-items:center; }
+  .rt-empty-h { font-size:17px; font-weight:500; letter-spacing:-.012em; color:var(--ink); }
+  .rt-empty-p { color:var(--ink-3); font-size:13.5px; line-height:1.5; }
+  .rt-empty-btns { display:flex; gap:8px; margin-top:6px; flex-wrap:wrap; justify-content:center; }
+  .rt-chip { padding:7px 13px; background:var(--panel); border:1px solid var(--rule-2); border-radius:7px;
+            font-size:13px; color:var(--ink-2); cursor:pointer; font-family:var(--sans); }
+  .rt-chip:hover { border-color:var(--rule-strong); }
+  .rt-chip--ink { background:var(--ink); color:#fff; border-color:var(--ink); }
+
+  /* ---------- client suggestion popup (new entry / editing) ---------- */
+  .rt-cellpop-wrap { position:relative; }
+  .rt-clientpop { position:absolute; top:calc(100% + 4px); left:0; width:260px; background:var(--panel);
+            border:1px solid var(--rule); border-radius:8px; box-shadow:0 14px 32px -10px rgba(20,23,26,.22), 0 0 0 1px rgba(20,23,26,.04);
+            z-index:20; overflow:hidden; font-size:13px; }
+  .rt-clientpop-item { padding:7px 11px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--rule); cursor:pointer; color:var(--ink); }
+  .rt-clientpop-item:first-child { border-top:0; }
+  .rt-clientpop-item:hover, .rt-clientpop-item.active { background:var(--signal-soft); }
+  .rt-clientpop-item .nm { flex:1; }
+  .rt-clientpop-item .rt-mono { font-size:10.5px; color:var(--ink-4); letter-spacing:.02em; }
+  .rt-clientpop-new { padding:8px 11px; border-top:1px solid var(--rule); background:var(--paper); color:var(--ink-3);
+            font-size:12.5px; display:flex; align-items:center; gap:6px; cursor:pointer; }
+
+  /* ---------- unlock modal ---------- */
+  .rt-overlay { position:fixed; inset:0; background:rgba(20,23,26,.35); display:flex; align-items:flex-start;
+            justify-content:center; padding-top:18vh; z-index:100; }
+  .rt-modal { width:440px; background:var(--panel); border-radius:10px;
+            box-shadow:0 24px 60px -20px rgba(20,23,26,.4), 0 0 0 1px rgba(20,23,26,.05); overflow:hidden; }
+  .rt-modal-head { padding:18px 22px 6px; display:flex; align-items:center; gap:10px; }
+  .rt-modal-title { padding:0 22px 4px; font-size:16px; font-weight:500; letter-spacing:-.012em; }
+  .rt-modal-body { padding:6px 22px 16px; color:var(--ink-3); font-size:13.5px; line-height:1.5; }
+  .rt-modal-foot { padding:14px 18px; border-top:1px solid var(--rule); background:linear-gradient(180deg,#FBFCFC,#F6F7F6);
+            display:flex; gap:10px; }
+  .rt-modal-foot .rt-spacer { flex:1; }
+
+  @keyframes rt-caretblink { 0%,49%{opacity:1} 50%,100%{opacity:0} }
+  @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.001s !important; transition-duration:.001s !important; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+(() => {
+'use strict';
+
+/* =====================================================================
+ * Time Tracker · Recorded time
+ *
+ * The "Recorded Time" tab — a notebook the user maintains: review, edit,
+ * add and delete time entries. No global save (changes commit inline),
+ * no surveillance language, all affordances pull-based. Entries that are
+ * already in an export are *locked*; unlocking is an explicit, warn-toned
+ * action, never an undo.
+ *
+ * Self-contained — vanilla JS, no build step, no CDN (same pattern as
+ * Export for billing.html). Data is real: the page reads and writes the
+ * monthly CSV through the localhost server's /api/entries + /api/clients
+ * + /api/exports routes (see live_view.rs). No mock data — if the server
+ * is unreachable the page shows an error state, not a fake notebook.
+ *
+ * Interactive: date-range switching, click-to-edit cells (Enter/blur
+ * commits, Esc cancels; duration recomputes from start/end; the Notes cell
+ * opens as a 3-line editor — plain Enter is a newline, blur or Cmd/Ctrl+Enter
+ * commits), the new-entry flow (open → fill → save / partial-prompt / discard), the
+ * delete → confirm → undo-toast loop, the billable pill toggle, and the
+ * lock → unlock-modal → unlock path.
+ * ===================================================================== */
+
+const $root = () => document.getElementById('root');
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+  { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+
+/* ---------- time helpers ---------- */
+// "9:08 AM" -> minutes since midnight ; null on parse failure
+function parseTime(str) {
+  const m = /^\s*(\d{1,2}):(\d{2})\s*([AaPp][Mm])\s*$/.exec(String(str || ''));
+  if (!m) return null;
+  let h = parseInt(m[1], 10) % 12;
+  if (/p/i.test(m[3])) h += 12;
+  return h * 60 + parseInt(m[2], 10);
+}
+function fmtClock(mins) {
+  mins = ((mins % 1440) + 1440) % 1440;
+  let h = Math.floor(mins / 60), m = mins % 60;
+  const ap = h < 12 ? 'AM' : 'PM';
+  h = h % 12; if (h === 0) h = 12;
+  return `${h}:${String(m).padStart(2,'0')} ${ap}`;
+}
+function fmtDur(mins) {
+  mins = Math.max(0, Math.round(mins));
+  return `${Math.floor(mins/60)}:${String(mins%60).padStart(2,'0')}`;
+}
+function durBetween(start, end) {
+  const a = parseTime(start), b = parseTime(end);
+  if (a == null || b == null) return null;
+  let d = b - a; if (d < 0) d += 1440; // crossed midnight
+  return fmtDur(d);
+}
+function durMinutes(durStr) {
+  const m = /^(\d+):(\d{2})$/.exec(String(durStr || '0:00'));
+  return m ? parseInt(m[1],10)*60 + parseInt(m[2],10) : 0;
+}
+
+/* ---------- date-label helpers (for the scope captions) ---------- */
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function dLabel(d) { return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`; }
+function dShort(d) { return `${MONTHS[d.getMonth()]} ${d.getDate()}`; }
+function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+function mondayOf(d) { const x = new Date(d); const dow = (x.getDay() + 6) % 7; return addDays(x, -dow); }
+function rangeDates(r, today) {
+  switch (r) {
+    case 'today': return [today, today];
+    case 'yesterday': { const y = addDays(today, -1); return [y, y]; }
+    case 'this_week': return [mondayOf(today), today];
+    case 'last_week': { const m = mondayOf(today); return [addDays(m, -7), addDays(m, -1)]; }
+    case 'all': return null;
+    default: return [today, today];
+  }
+}
+function rangeCaption(r) {
+  const today = new Date();
+  const lbl = { today:'Today', yesterday:'Yesterday', this_week:'This week', last_week:'Last week', all:'All time' }[r] || r;
+  const span = rangeDates(r, today);
+  if (!span) return { scopeLbl: 'All time · everything recorded', scopeFoot: 'All time' };
+  const [a, b] = span;
+  const txt = (+a === +b) ? dLabel(a)
+    : (a.getFullYear() === b.getFullYear() ? `${dShort(a)}–${dShort(b)}, ${b.getFullYear()}` : `${dLabel(a)} – ${dLabel(b)}`);
+  return { scopeLbl: `${lbl} · ${txt}`, scopeFoot: `${lbl} (${txt})` };
+}
+const RANGES = {
+  today:     { label:'Today' },
+  yesterday: { label:'Yesterday' },
+  this_week: { label:'This week' },
+  last_week: { label:'Last week' },
+  all:       { label:'All' },
+};
+
+/* ---------- state ---------- */
+const S = {
+  range: 'today',
+  rows: [],
+  loadError: null,      // string when the last /api/entries fetch failed
+  loading: true,
+  clients: [],          // [{name, hint}] from /api/clients
+  editing: null,        // { rowId, cell }   cell ∈ start|end|client|engagement|description
+  newRow: null,         // { ...entry, partial:bool }
+  newClientOpen: false,
+  delConfirm: null,     // rowId
+  undo: null,           // { row, index, secs, timer, pending }   pending=DELETE not yet sent
+  unlockId: null,       // rowId of locked entry pending unlock
+  busy: false,          // a mutation request is in flight
+  billableOnly: false,  // client-side "billable only" filter
+};
+// "2026-05-10" -> "May 10" (display); keep the ISO form on the row too.
+function isoToLabel(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  if (!m) return String(iso || '');
+  return `${MONTHS[parseInt(m[2],10)-1]} ${parseInt(m[3],10)}`;
+}
+// Map an /api/entries JSON object to the page's row shape.
+function ingest(e) {
+  return { id:e.id, dateISO:e.date, date:isoToLabel(e.date), start:e.start, end:e.end, dur:e.dur,
+           client:e.client, engagement:e.engagement, description:e.narrative || '',
+           billable:!!e.billable, locked:!!e.locked, runId:e.run_id || null };
+}
+async function loadRange(r) {
+  S.range = r;
+  S.editing = null; S.newRow = null; S.newClientOpen = false; S.delConfirm = null; S.unlockId = null;
+  flushUndo(); clearUndo();
+  S.loading = true; S.loadError = null;
+  render();
+  try {
+    const resp = await fetch('/api/entries?range=' + encodeURIComponent(r));
+    if (!resp.ok) throw new Error('server returned ' + resp.status);
+    const data = await resp.json();
+    if (!Array.isArray(data)) throw new Error('unexpected response');
+    S.rows = data.map(ingest);
+    S.loadError = null;
+  } catch (err) {
+    S.rows = [];
+    S.loadError = (err && err.message) || 'could not reach the app';
+  }
+  S.loading = false;
+  render();
+}
+function setRange(r) { loadRange(r); }
+async function refresh() { await loadRange(S.range); }
+async function loadClients() {
+  try {
+    const resp = await fetch('/api/clients');
+    if (resp.ok) { const d = await resp.json(); if (Array.isArray(d)) S.clients = d; }
+  } catch {}
+}
+function clearUndo() { if (S.undo && S.undo.timer) clearInterval(S.undo.timer); S.undo = null; }
+function rowById(id) { return S.rows.find(r => r.id === id); }
+function distinctClients() {
+  const set = new Set();
+  S.clients.forEach(c => set.add(c.name));
+  S.rows.forEach(r => r.client && set.add(r.client));
+  S.newRow && S.newRow.client && set.add(S.newRow.client);
+  return [...set].filter(Boolean).sort((a,b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+}
+function clientHint(name) {
+  const c = S.clients.find(c => c.name === name);
+  return (c && c.hint) ? c.hint : '—';
+}
+// commit the pending DELETE if there is one (called when leaving the page / switching range)
+function flushUndo() {
+  if (S.undo && S.undo.pending && S.undo.row) {
+    const id = S.undo.row.id;
+    try { fetch('/api/entries/' + encodeURIComponent(id), { method:'DELETE', keepalive:true }).catch(() => {}); } catch {}
+    S.undo.pending = false;
+  }
+}
+
+/* ---------- scope numbers ---------- */
+function scopeStats() {
+  const rows = visibleRows();
+  let billMin = 0;
+  rows.forEach(r => { if (r.billable) billMin += durMinutes(r.dur); });
+  return {
+    entries: rows.length,
+    billable: (billMin / 60).toFixed(1) + 'h',
+    clients: new Set(rows.map(r => r.client)).size,
+    engagements: new Set(rows.map(r => r.client + ' ' + r.engagement)).size,
+  };
+}
+
+/* ---------- fragments ---------- */
+function chrome() {
+  const tab = (id, label, href, on) =>
+    on ? `<span class="rt-tab on">${label}</span>` : `<a class="rt-tab" href="${href}">${label}</a>`;
+  return `
+  <header class="rt-chrome">
+    <div class="rt-brand"><div class="rt-mark" aria-hidden="true"></div>
+      <div class="rt-bname"><b>Time Tracker</b><span class="rt-lbl">v0.3</span></div></div>
+    <div class="rt-divider"></div>
+    <nav class="rt-tabs" role="tablist">
+      ${tab('recorded','Recorded Time','',true)}
+      ${tab('export','Export','/export',false)}
+      ${tab('history','Exports history','/export?view=history',false)}
+    </nav>
+    <div class="rt-spacer"></div>
+    <span class="rt-conn"><span class="rt-cdot"></span>connected · local</span>
+  </header>`;
+}
+function titleBlock() {
+  return `
+  <div class="rt-titlewrap">
+    <div class="row1"><h1>Recorded time</h1><span class="rt-lbl">${esc(rangeCaption(S.range).scopeLbl)}</span></div>
+    <div class="sub">Review, edit, and add time entries. Changes save inline. Entries already included in an export are locked — unlock if you need to amend the underlying record.</div>
+  </div>`;
+}
+function controlsBar() {
+  const seg = Object.entries(RANGES).map(([id, r]) =>
+    `<span class="rt-seg-opt${id === S.range ? ' on' : ''}" data-act="range" data-range="${id}">${esc(r.label)}</span>`).join('');
+  return `
+  <div class="rt-controls">
+    <div class="rt-seg">${seg}</div>
+    <div class="rt-toggle${S.billableOnly ? ' on' : ''}" data-act="billtoggle"><span class="rt-switch"></span>Billable only</div>
+    <div class="rt-spacer"></div>
+    <button class="rt-newbtn" data-act="new-open"${(S.newRow || S.busy) ? ' disabled' : ''}><svg width="11" height="11" viewBox="0 0 11 11" aria-hidden><path d="M5.5 1.5 V9.5 M1.5 5.5 H9.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>New entry</button>
+  </div>`;
+}
+// the rows the grid currently shows (after the "billable only" filter)
+function visibleRows() { return S.billableOnly ? S.rows.filter(r => r.billable) : S.rows; }
+function counters() {
+  const s = scopeStats();
+  const c = (v, l) => `<div class="rt-counter"><b>${esc(v)}</b><span class="rt-lbl">${l}</span></div>`;
+  return `<div class="rt-counters">${c(s.entries,'entries')}${c(s.billable,'billable')}${c(s.clients,'clients')}${c(s.engagements,'engagements')}</div>`;
+}
+function headerRow() {
+  const hc = (label, sortable, active, dir) => `
+    <div class="hc${sortable ? ' sortable' : ''}">
+      <span class="rt-lbl" style="color:${active ? 'var(--ink-2)' : 'var(--ink-4)'}">${label}</span>
+      ${sortable && active ? `<svg width="9" height="9" viewBox="0 0 9 9" aria-hidden style="transform:${dir==='asc'?'rotate(180deg)':'none'}"><path d="M1.5 3 L4.5 6 L7.5 3" stroke="var(--ink-2)" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>` : ''}
+    </div>`;
+  return `<div class="rt-head">
+    <span></span>${hc('Date',false)}${hc('Start',true,true,'desc')}${hc('End',false)}${hc('Duration',true,false)}
+    ${hc('Client',true,false)}${hc('Engagement',false)}${hc('Notes',false)}
+    <div style="text-align:center">${hc('Bill',false)}</div><span></span>
+  </div>`;
+}
+
+/* a read-mode data cell; `cell` names it for click-to-edit (non-locked rows only).
+   `placeholder`, if given, is shown faint when `content` is empty so the cell is
+   still visibly there to click — without it an empty Notes cell looks like a dead
+   gap you can't get into. */
+function dcell(r, cell, content, cls, placeholder) {
+  const editable = !r.locked && cell && !['date'].includes(cell);
+  const c = (cls || '') + (editable ? ' click' : '');
+  const hasContent = content && String(content).trim().length > 0;
+  const inner = hasContent ? content
+    : (editable && placeholder ? `<span class="rt-ph">${esc(placeholder)}</span>` : (content || ''));
+  return `<div class="rt-cell ${c}"${editable ? ` data-act="edit" data-row="${r.id}" data-cell="${cell}"` : ''}>${inner}</div>`;
+}
+function billCell(r, dim) {
+  const dimc = dim ? ' dim' : '';
+  if (r.billable) return `<div class="rt-cellctr"><span class="rt-bill${dimc}"${r.locked ? '' : ` data-act="bill" data-row="${r.id}"`}><span class="d"></span>billable</span></div>`;
+  return `<div class="rt-cellctr"><span class="rt-internal"${r.locked ? '' : ` data-act="bill" data-row="${r.id}"`}>internal</span></div>`;
+}
+
+/* read row (with hover affordance handled via CSS :hover on .rt-row — we
+   also add the delete × always, shown on hover via... actually we render
+   it always but only visible on hover) */
+function readRow(r) {
+  return `
+  <div class="rt-row" data-rowwrap="${r.id}">
+    <span></span>
+    <div class="rt-cell mono dim">${esc(r.date)}</div>
+    ${dcell(r,'start',`<span>${esc(r.start)}</span>`,'mono')}
+    ${dcell(r,'end',`<span>${esc(r.end)}</span>`,'mono')}
+    <div class="rt-cell mono strong">${esc(r.dur)}</div>
+    ${dcell(r,'client',esc(r.client),'strong')}
+    ${dcell(r,'engagement',esc(r.engagement),'eng')}
+    ${dcell(r,'description',esc(r.description),'dim2','Add notes…')}
+    ${billCell(r,false)}
+    <div class="rt-cellend"><button class="rt-delx" data-act="del-ask" data-row="${r.id}" title="Delete entry" style="visibility:hidden"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden><path d="M2 2 L8 8 M8 2 L2 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></div>
+  </div>`;
+}
+function lockedRow(r) {
+  return `
+  <div class="rt-row locked rt-locked">
+    <div class="rt-cellctr"><span class="rt-lockglyph" data-act="unlock-ask" data-row="${r.id}" title="Included in ${esc(r.runId || '')} — click to amend">${lockSvg(12)}</span></div>
+    <div class="rt-cell mono dim">${esc(r.date)}</div>
+    <div class="rt-cell mono dim">${esc(r.start)}</div>
+    <div class="rt-cell mono dim">${esc(r.end)}</div>
+    <div class="rt-cell mono dim2 strong">${esc(r.dur)}</div>
+    <div class="rt-cell dim2 strong">${esc(r.client)}</div>
+    <div class="rt-cell eng">${esc(r.engagement)}</div>
+    <div class="rt-cell dim">${esc(r.description)}</div>
+    ${billCell(r,true)}
+    <span></span>
+  </div>`;
+}
+function editInput(value, cls, ph, multiline) {
+  if (multiline) {
+    // 3-line editor — plain Enter inserts a newline; blur (or Cmd/Ctrl+Enter) commits, Esc cancels
+    return `<div class="rt-editcell focus multiline ${cls || ''}"><textarea rows="3" placeholder="${esc(ph||'')}">${esc(value)}</textarea></div>`;
+  }
+  return `<div class="rt-editcell focus ${cls || ''}"><input value="${esc(value)}" placeholder="${esc(ph||'')}" /></div>`;
+}
+function editingRow(r) {
+  const cell = S.editing.cell;
+  const seg = (name, content, mono) => name === cell
+    ? editInput(r[name === 'engagement' ? 'engagement' : name] || '', mono ? 'time' : '')
+    : `<div class="rt-cell ${mono ? 'mono' : ''}${name==='engagement'?' eng':''}${name==='client'?' strong':''}${name==='description'?' dim2':''}">${esc(r[name])}</div>`;
+  // client cell, when editing, gets the suggestion popup
+  const clientCellHTML = cell === 'client'
+    ? `<div class="rt-cellpop-wrap">${editInput(r.client || '', '', 'Client name')}${clientPopupHTML(r.client || '')}</div>`
+    : `<div class="rt-cell strong">${esc(r.client)}</div>`;
+  const tall = cell === 'description';
+  return `
+  <div class="rt-row editing${tall ? ' tall' : ''}">
+    <span></span>
+    <div class="rt-cell mono dim">${esc(r.date)}</div>
+    ${cell === 'start' ? editInput(r.start, 'time') : `<div class="rt-cell mono">${esc(r.start)}</div>`}
+    ${cell === 'end'   ? editInput(r.end, 'time')   : `<div class="rt-cell mono">${esc(r.end)}</div>`}
+    <div class="rt-cell mono strong">${esc(r.dur)}</div>
+    ${clientCellHTML}
+    ${cell === 'engagement' ? editInput(r.engagement || '', '', 'Engagement') : `<div class="rt-cell eng">${esc(r.engagement)}</div>`}
+    ${cell === 'description' ? editInput(r.description || '', '', 'What did you work on?', true) : `<div class="rt-cell dim2">${esc(r.description)}</div>`}
+    ${billCell(r,false)}
+    <span></span>
+  </div>`;
+}
+function clientPopupHTML(typed) {
+  const t = (typed || '').toLowerCase();
+  const matches = distinctClients().filter(c => !t || c.toLowerCase().includes(t));
+  const items = matches.map((c, i) =>
+    `<div class="rt-clientpop-item${i===0?' active':''}" data-act="pick-client" data-client="${esc(c)}"><span class="nm">${esc(c)}</span><span class="rt-mono">${esc(clientHint(c))}</span></div>`).join('');
+  return `<div class="rt-clientpop">${items}<div class="rt-clientpop-new" data-act="new-client"><span class="rt-mono" style="color:var(--ink-4)">+</span> New client…</div></div>`;
+}
+function newEntryRow() {
+  const n = S.newRow;
+  const dur = durBetween(n.start, n.end) || '0:00';
+  const clientHTML = `<div class="rt-cellpop-wrap"><div class="rt-editcell focus"><input id="rt-new-client" value="${esc(n.client)}" placeholder="Client name" data-newfield="client" /></div>${S.newClientOpen ? clientPopupHTML(n.client) : ''}</div>`;
+  return `
+  <div class="rt-row newrow tall">
+    <div class="rt-cellctr"><span class="rt-mono" style="font-size:10.5px;color:var(--signal-ink);letter-spacing:.06em">+</span></div>
+    <div class="rt-cell mono dim">${esc(n.date)}</div>
+    <div class="rt-editcell time"><input value="${esc(n.start)}" data-newfield="start" /></div>
+    <div class="rt-editcell time"><input value="${esc(n.end)}" data-newfield="end" /></div>
+    <div class="rt-cell mono strong" id="rt-new-dur">${esc(dur)}</div>
+    ${clientHTML}
+    <div class="rt-editcell ${n.engagement ? '' : 'ghost'}"><input value="${esc(n.engagement)}" placeholder="Engagement" data-newfield="engagement" /></div>
+    <div class="rt-editcell multiline ${n.description ? '' : 'ghost'}"><textarea rows="3" placeholder="What did you work on?" data-newfield="description">${esc(n.description)}</textarea></div>
+    ${ n.billable
+        ? `<div class="rt-cellctr"><span class="rt-bill" data-act="new-bill"><span class="d"></span>billable</span></div>`
+        : `<div class="rt-cellctr"><span class="rt-internal" data-act="new-bill">internal</span></div>` }
+    <span></span>
+    ${ n.partial ? `<div class="rt-partial"><span class="rt-mono" style="font-size:11px">↩</span> Add a client and engagement to save.<span class="hint">Enter to save · Esc to discard</span></div>` : '' }
+  </div>`;
+}
+function deleteRow(r) {
+  return `
+  <div class="rt-row delrow">
+    <span></span>
+    <div class="rt-cell mono dim rt-strike">${esc(r.date)}</div>
+    <div class="rt-cell mono dim rt-strike">${esc(r.start)}</div>
+    <div class="rt-cell mono dim rt-strike">${esc(r.end)}</div>
+    <div class="rt-cell mono dim rt-strike">${esc(r.dur)}</div>
+    <div class="rt-delask">
+      <span class="q">Delete this entry?</span>
+      <div class="rt-spacer" style="flex:1"></div>
+      <button class="rt-btn rt-btn--bad" data-act="del-do" data-row="${r.id}">Delete</button>
+      <button class="rt-btn" data-act="del-cancel">Cancel</button>
+    </div>
+  </div>`;
+}
+
+function lockSvg(size) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 12 12" aria-hidden><rect x="2.5" y="5.5" width="7" height="5" rx="1" stroke="currentColor" stroke-width="1" fill="none"/><path d="M4 5.5 V4 a2 2 0 0 1 4 0 V5.5" stroke="currentColor" stroke-width="1" fill="none" stroke-linecap="round"/></svg>`;
+}
+
+function gridHTML() {
+  const rows = visibleRows();
+  const lockedCount = rows.filter(r => r.locked).length;
+  const lockedRun = (rows.find(r => r.locked) || {}).runId;
+  let body = '';
+  if (S.newRow) body += newEntryRow();
+  for (const r of rows) {
+    if (S.delConfirm === r.id) body += deleteRow(r);
+    else if (S.editing && S.editing.rowId === r.id) body += editingRow(r);
+    else if (r.locked) body += lockedRow(r);
+    else body += readRow(r);
+  }
+  let html = `<div class="rt-grid">${headerRow()}${body}</div>`;
+  if (lockedCount > 0) {
+    html += `<div class="rt-lockcap">${`<span style="color:var(--ink-3)">${lockSvg(12)}</span>`}<span><b>${lockedCount} ${lockedCount===1?'entry':'entries'}</b> are included in export <span class="rt-mono">${esc(lockedRun||'')}</span>. Click the lock to amend an underlying record.</span></div>`;
+  }
+  return html;
+}
+function loadingHTML() {
+  return `<div class="rt-empty"><div class="rt-empty-inner">
+    <div class="rt-empty-h">Loading…</div>
+    <div class="rt-empty-p">Reading recorded time for ${esc(rangeCaption(S.range).scopeFoot)}.</div>
+  </div></div>`;
+}
+function errorHTML() {
+  return `<div class="rt-empty"><div class="rt-empty-inner">
+    <div class="rt-empty-icon" style="color:var(--bad)"><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden><circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M11 6 V12 M11 15 V15.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div>
+    <div class="rt-empty-h">Couldn’t load recorded time.</div>
+    <div class="rt-empty-p">${esc(S.loadError || 'The Time Tracker app may not be running.')} <br/>Make sure Time Tracker is open, then try again.</div>
+    <div class="rt-empty-btns"><span class="rt-chip rt-chip--ink" data-act="retry">Retry</span></div>
+  </div></div>`;
+}
+function emptyHTML() {
+  return `
+  <div class="rt-empty"><div class="rt-empty-inner">
+    <div class="rt-empty-icon"><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden><rect x="3.5" y="5" width="15" height="13" rx="2" stroke="var(--ink-3)" stroke-width="1.3" fill="none"/><path d="M3.5 9 H18.5" stroke="var(--ink-3)" stroke-width="1.3"/><path d="M7 3 V6 M15 3 V6" stroke="var(--ink-3)" stroke-width="1.3" stroke-linecap="round"/></svg></div>
+    <div class="rt-empty-h">No recorded time in this range.</div>
+    <div class="rt-empty-p">Showing <span class="rt-mono" style="color:var(--ink-2)">${esc(rangeCaption(S.range).scopeFoot)}</span>. Switch to a wider range, or add an entry by hand.</div>
+    <div class="rt-empty-btns">
+      <span class="rt-chip" data-act="range" data-range="this_week">Switch to This week</span>
+      <span class="rt-chip" data-act="range" data-range="all">Switch to All</span>
+      <span class="rt-chip rt-chip--ink" data-act="empty-add">+ Add an entry</span>
+    </div>
+  </div></div>`;
+}
+function footerHTML() {
+  const s = scopeStats();
+  let toast = '';
+  if (S.undo) {
+    toast = `<div class="rt-toast"><span class="tl">Entry deleted</span><span style="color:rgba(255,255,255,.5)">·</span><button data-act="undo">Undo</button><span class="tm">· ${S.undo.secs}s</span></div>`;
+  }
+  return `<div class="rt-footer">
+    <div class="rt-footer-pill"><b>${s.entries} entries</b><span class="sep">·</span><b>${s.billable} billable</b><span class="sep">·</span><span class="sc">scope: ${esc(rangeCaption(S.range).scopeFoot)}</span></div>
+    <div class="rt-spacer" style="flex:1"></div>${toast}
+  </div>`;
+}
+function unlockModalHTML() {
+  const r = rowById(S.unlockId); if (!r) return '';
+  return `
+  <div class="rt-overlay" data-act="overlay-close">
+    <div class="rt-modal" data-stop="1">
+      <div class="rt-modal-head"><span style="color:var(--warn);display:grid;place-items:center">${lockSvg(14)}</span><span class="rt-lbl" style="color:var(--warn)">locked entry</span></div>
+      <div class="rt-modal-title">Unlock to edit?</div>
+      <div class="rt-modal-body">This entry is included in export <span class="rt-mono" style="color:var(--ink-2)">${esc(r.runId||'')}</span>. Editing it may affect billing records you’ve already sent out. The change will be logged on the entry.</div>
+      <div class="rt-modal-foot"><div class="rt-spacer"></div>
+        <button class="rt-btn" data-act="unlock-cancel">Cancel</button>
+        <button class="rt-btn rt-btn--warn" data-act="unlock-do" data-row="${r.id}">Unlock</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ---------- page ---------- */
+function render() {
+  let mid;
+  if (S.loadError && !S.newRow) mid = errorHTML();
+  else if (S.loading && S.rows.length === 0) mid = loadingHTML();
+  else if (visibleRows().length === 0 && !S.newRow) mid = emptyHTML();
+  else mid = gridHTML();
+  $root().innerHTML = `<div class="rt-root"><div class="rt-page">
+    ${chrome()}
+    ${titleBlock()}
+    ${controlsBar()}
+    ${counters()}
+    ${mid}
+    ${footerHTML()}
+  </div>${S.unlockId ? unlockModalHTML() : ''}</div>`;
+  wire();
+  // autofocus the active single-line edit input. The Notes textarea is deliberately
+  // NOT auto-focused — it opens as an expanded view; the user clicks into it to edit.
+  const f = $root().querySelector('.rt-editcell.focus input, #rt-new-client');
+  if (f && S.editing) { f.focus(); try { f.setSelectionRange(f.value.length, f.value.length); } catch {} }
+}
+
+/* ---------- editing helpers ---------- */
+function beginEdit(rowId, cell) {
+  if (S.newRow) return; // one thing at a time
+  S.editing = { rowId, cell };
+  S.delConfirm = null;
+  render();
+}
+/* lightweight error toast (auto-dismiss). Reuses the .rt-toast look. */
+let __toastTimer = null;
+function showError(msg) {
+  const root = $root();
+  let host = root.querySelector('#rt-errtoast-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'rt-errtoast-host';
+    host.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:200;';
+    root.appendChild(host);
+  }
+  host.innerHTML = `<div class="rt-toast" style="background:var(--bad)"><span class="tl">Couldn’t save</span><span style="color:rgba(255,255,255,.5)">·</span><span style="font-size:13px">${esc(msg)}</span></div>`;
+  if (__toastTimer) clearTimeout(__toastTimer);
+  __toastTimer = setTimeout(() => { host.innerHTML = ''; }, 5000);
+}
+async function apiJson(url, opts) {
+  const resp = await fetch(url, opts);
+  let data = null;
+  try { data = await resp.json(); } catch {}
+  if (!resp.ok) {
+    const msg = (data && data.error) || ('server returned ' + resp.status);
+    const e = new Error(msg); e.status = resp.status; throw e;
+  }
+  return data;
+}
+
+/* Commit an edit. `ctx` is the editing context that was open when the edit
+ * started (passed by the deferred blur handler so a stale blur can't clobber a
+ * cell the user has since clicked into). `_done` makes it idempotent — Enter /
+ * Esc / a client-popup pick commit eagerly, then the trailing setTimeout(0)
+ * blur is a no-op. */
+function commitEdit(value, ctx) { applyEdit(ctx || S.editing, value, true); }
+/* Apply an edited cell value: optimistic local update + PATCH. `reload` re-fetches
+ * the range once the PATCH lands (the normal path). Tab-advance passes reload=false
+ * because it immediately re-opens the next cell — letting refresh() run would tear
+ * that editor straight back down; it reconciles on the final commit instead. */
+function applyEdit(ctx, value, reload) {
+  if (!ctx || ctx._done) return;
+  ctx._done = true;
+  const r = rowById(ctx.rowId); const cell = ctx.cell;
+  if (S.editing === ctx) S.editing = null;
+  if (!r) { render(); return; }
+  const v = String(value).trim();
+  const before = { start:r.start, end:r.end, dur:r.dur, client:r.client, engagement:r.engagement, description:r.description };
+  // optimistic local update
+  let patch = {};
+  if (cell === 'start' || cell === 'end') {
+    if (v) { r[cell] = v; patch[cell] = v; const d = durBetween(r.start, r.end); if (d) r.dur = d; }
+  } else if (cell === 'engagement') {
+    r.engagement = v.toUpperCase(); patch.engagement = r.engagement;
+  } else if (cell === 'client') {
+    r.client = v; patch.client = v;
+  } else if (cell === 'description') {
+    r.description = v; patch.narrative = v;
+  }
+  render();
+  if (Object.keys(patch).length === 0) return;
+  const rollback = err => { Object.assign(r, before); showError(err.message || 'edit failed'); render(); };
+  const req = apiJson('/api/entries/' + encodeURIComponent(r.id), {
+    method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(patch),
+  });
+  if (reload) req.then(() => refresh()).catch(rollback);
+  else req.catch(rollback);
+}
+function cancelEdit() { if (S.editing) S.editing._done = true; S.editing = null; render(); }
+
+function openNewRow() {
+  if (S.newRow) return;
+  // start = end-of-most-recent or 9:00 AM; end = +45m
+  let startMin = 9 * 60;
+  if (S.rows.length) {
+    const last = S.rows.reduce((a, b) => {
+      const am = parseTime(a.end), bm = parseTime(b.end);
+      return (bm != null && (am == null || bm > am)) ? b : a;
+    });
+    const m = parseTime(last.end); if (m != null) startMin = m;
+  }
+  const start = fmtClock(startMin), end = fmtClock(startMin + 45);
+  // pick a sensible date: the most recent row's ISO date, else the range's
+  // anchor day (today for today/this_week/all; yesterday/last-week end for those).
+  const today = new Date();
+  const span = rangeDates(S.range, today);
+  const anchor = (S.rows[0] && S.rows[0].dateISO)
+    ? S.rows[0].dateISO
+    : (span ? toISO(span[1]) : toISO(today));
+  S.newRow = { dateISO:anchor, date:isoToLabel(anchor), start, end, dur:'0:45', client:'', engagement:'', description:'', billable:true, partial:false };
+  S.newClientOpen = false;
+  S.editing = null; S.delConfirm = null;
+  render();
+  const ci = $root().querySelector('#rt-new-client'); if (ci) ci.focus();
+}
+function toISO(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function readNewFields() {
+  if (!S.newRow) return;
+  $root().querySelectorAll('[data-newfield]').forEach(inp => {
+    const k = inp.dataset.newfield;
+    let v = inp.value;
+    if (k === 'engagement') v = v.trim().toUpperCase();
+    S.newRow[k] = v;
+  });
+  const d = durBetween(S.newRow.start, S.newRow.end);
+  if (d) S.newRow.dur = d;
+}
+function saveNewRow() {
+  readNewFields();
+  const n = S.newRow;
+  if (!n.client.trim() || !n.engagement.trim()) { n.partial = true; render(); return; }
+  if (S.busy) return;
+  S.busy = true; render();
+  apiJson('/api/entries', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      date:n.dateISO, start:n.start.trim(), end:n.end.trim(),
+      client:n.client.trim(), engagement:n.engagement.trim().toUpperCase(),
+      narrative:n.description, billable:!!n.billable,
+    }),
+  }).then(() => { S.newRow = null; S.newClientOpen = false; S.busy = false; return refresh(); })
+    .catch(err => { S.busy = false; showError(err.message || 'could not add entry'); render(); });
+}
+function discardNewRow() { S.newRow = null; S.newClientOpen = false; render(); }
+
+/* ---------- delete + undo ---------- */
+// Delete is deferred: we remove the row locally, show an 8s undo toast, and
+// only fire DELETE /api/entries/:id after the window closes (or immediately
+// commit it if the user navigates away — see flushUndo). Undo just cancels
+// the pending delete and puts the row back.
+function doDelete(rowId) {
+  const idx = S.rows.findIndex(r => r.id === rowId);
+  if (idx < 0) return;
+  const [row] = S.rows.splice(idx, 1);
+  S.delConfirm = null;
+  flushUndo(); clearUndo();
+  S.undo = { row, index: idx, secs: 8, timer: null, pending: true };
+  S.undo.timer = setInterval(() => {
+    if (!S.undo) return;
+    S.undo.secs -= 1;
+    if (S.undo.secs <= 0) {
+      const u = S.undo; clearUndo();
+      if (u.pending) {
+        apiJson('/api/entries/' + encodeURIComponent(u.row.id), { method:'DELETE' })
+          .then(() => refresh())
+          .catch(err => { showError(err.message || 'delete failed'); refresh(); });
+      } else { render(); }
+    } else {
+      const tm = $root().querySelector('.rt-toast .tm'); if (tm) tm.textContent = '· ' + S.undo.secs + 's';
+    }
+  }, 1000);
+  render();
+}
+function undoDelete() {
+  if (!S.undo) return;
+  const { row, index } = S.undo;
+  S.undo.pending = false;     // cancel the pending DELETE
+  S.rows.splice(Math.min(index, S.rows.length), 0, row);
+  clearUndo();
+  render();
+}
+/* per-row billable toggle -> PATCH */
+function toggleBillable(rowId) {
+  const r = rowById(rowId); if (!r || r.locked) return;
+  const next = !r.billable;
+  r.billable = next; render();
+  apiJson('/api/entries/' + encodeURIComponent(r.id), {
+    method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ billable: next }),
+  }).then(() => refresh())
+    .catch(err => { r.billable = !next; showError(err.message || 'could not update'); render(); });
+}
+/* "+ New client…" was clicked. Take whatever name is typed in the active
+   client field, register it in the clients registry, then commit it to the
+   cell (works for both the new-entry row and an editing client cell). */
+function registerNewClientFromInput() {
+  const root = $root();
+  const inp = root.querySelector('#rt-new-client') || root.querySelector('.rt-editcell.focus input');
+  const name = inp ? inp.value.trim() : '';
+  if (!name) {
+    // nothing typed yet — just keep the field focused so the user can type
+    S.newClientOpen = (S.newRow ? true : S.newClientOpen);
+    if (inp) inp.focus();
+    return;
+  }
+  const commitName = () => {
+    if (S.newRow) {
+      readNewFields(); S.newRow.client = name; S.newClientOpen = false; render();
+      const ee = root.querySelector('[data-newfield="engagement"]'); if (ee) ee.focus();
+    } else if (S.editing && S.editing.cell === 'client') {
+      commitEdit(name);
+    }
+  };
+  apiJson('/api/clients', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ name }) })
+    .then(list => { if (Array.isArray(list)) S.clients = list; commitName(); })
+    .catch(err => { showError(err.message || 'could not add client'); commitName(); });
+}
+/* unlock a locked entry -> remove it from its export run's manifest membership */
+function unlockEntry(rowId) {
+  const r = rowById(rowId); if (!r || !r.runId) { S.unlockId = null; render(); return; }
+  const runId = r.runId, id = r.id;
+  S.unlockId = null;
+  apiJson('/api/exports/' + encodeURIComponent(runId) + '/unlock-entry', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ entry_id: id }),
+  }).then(() => refresh())
+    .catch(err => { showError(err.message || 'could not unlock'); render(); });
+}
+
+/* ---------- wiring ---------- */
+function wire() {
+  const root = $root();
+
+  // hover affordance: show the delete × on row hover
+  root.querySelectorAll('[data-rowwrap]').forEach(rw => {
+    const x = rw.querySelector('.rt-delx');
+    rw.addEventListener('mouseenter', () => { rw.classList.add('hover'); if (x) x.style.visibility = 'visible'; });
+    rw.addEventListener('mouseleave', () => { rw.classList.remove('hover'); if (x) x.style.visibility = 'hidden'; });
+  });
+
+  // click delegation
+  root.querySelectorAll('[data-act]').forEach(el => {
+    el.addEventListener('click', (ev) => {
+      const act = el.dataset.act;
+      // let plain nav anchors through
+      if (el.tagName === 'A') return;
+      ev.preventDefault(); ev.stopPropagation();
+      switch (act) {
+        case 'range': setRange(el.dataset.range); break;
+        case 'retry': refresh(); break;
+        case 'billtoggle': S.billableOnly = !S.billableOnly; render(); break;
+        case 'edit': beginEdit(el.dataset.row, el.dataset.cell); break;
+        case 'bill': toggleBillable(el.dataset.row); break;
+        case 'del-ask': S.delConfirm = el.dataset.row; S.editing = null; render(); break;
+        case 'del-cancel': S.delConfirm = null; render(); break;
+        case 'del-do': doDelete(el.dataset.row); break;
+        case 'undo': undoDelete(); break;
+        case 'new-open': openNewRow(); break;
+        case 'empty-add': openNewRow(); break;
+        case 'new-bill': readNewFields(); S.newRow.billable = !S.newRow.billable; render(); break;
+        case 'new-client': registerNewClientFromInput(); break;
+        case 'pick-client': {
+          if (S.newRow) { readNewFields(); S.newRow.client = el.dataset.client; S.newClientOpen = false; render();
+            const ei = root.querySelector('[data-newfield="engagement"]'); if (ei) ei.focus(); }
+          else if (S.editing && S.editing.cell === 'client') { commitEdit(el.dataset.client); }
+          break;
+        }
+        case 'unlock-ask': S.unlockId = el.dataset.row; render(); break;
+        case 'unlock-cancel': S.unlockId = null; render(); break;
+        case 'overlay-close': S.unlockId = null; render(); break;
+        case 'unlock-do': unlockEntry(el.dataset.row); break;
+        default: break;
+      }
+    });
+  });
+  // don't let clicks inside the modal card close it
+  const modalCard = root.querySelector('[data-stop="1"]');
+  if (modalCard) modalCard.addEventListener('click', e => e.stopPropagation());
+
+  // editing-cell input behavior (single-line input, or the multi-line Notes textarea)
+  const ei = root.querySelector('.rt-editcell.focus input, .rt-editcell.focus textarea');
+  if (ei && S.editing) {
+    const editCtx = S.editing;                 // pin the context this input belongs to
+    const multiline = ei.tagName === 'TEXTAREA';
+    ei.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') {
+        // hop to the next (or, with Shift, previous) fillable cell in this row,
+        // committing what's in the current one on the way past.
+        e.preventDefault();
+        const order = ['start', 'end', 'client', 'engagement', 'description'];
+        const i = order.indexOf(editCtx.cell);
+        const nextCell = e.shiftKey ? order[i - 1] : order[i + 1];
+        const rowId = editCtx.rowId;
+        if (nextCell) {
+          applyEdit(editCtx, ei.value, false);          // reload=false: we re-open right away
+          S.editing = { rowId, cell: nextCell };
+          render();
+          // single-line cells get auto-focused by render(); the Notes textarea doesn't, so do it here
+          const ta = $root().querySelector('.rt-editcell.focus textarea');
+          if (ta) { ta.focus(); try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch {} }
+        } else {
+          commitEdit(ei.value, editCtx);                // tab off either end finishes the edit
+        }
+        return;
+      }
+      if (e.key === 'Enter' && (!multiline || e.metaKey || e.ctrlKey)) { e.preventDefault(); commitEdit(ei.value, editCtx); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+      // plain Enter in the Notes textarea = newline (default) — committed on blur
+    });
+    // Defer the blur-commit so a click on another cell (or a client-popup item)
+    // is delivered and processed *before* render() tears down the DOM — otherwise
+    // that first click is swallowed and nothing gets selected. commitEdit's `_done`
+    // guard makes the trailing call a no-op if Enter/Esc/a pick already committed.
+    ei.addEventListener('blur', () => { const v = ei.value; setTimeout(() => commitEdit(v, editCtx), 0); }, { once:true });
+    if (S.editing.cell === 'client') {
+      ei.addEventListener('input', () => {
+        const pop = root.querySelector('.rt-clientpop'); if (!pop) return;
+        pop.outerHTML = clientPopupHTML(ei.value);
+        // re-bind the freshly written popup items
+        root.querySelectorAll('.rt-clientpop [data-act="pick-client"], .rt-clientpop [data-act="new-client"]').forEach(it => {
+          it.addEventListener('click', (e2) => {
+            e2.preventDefault(); e2.stopPropagation();
+            if (it.dataset.act === 'pick-client') commitEdit(it.dataset.client, editCtx);
+            else registerNewClientFromInput();
+          });
+        });
+      });
+    }
+  }
+
+  // new-entry inputs
+  if (S.newRow) {
+    root.querySelectorAll('[data-newfield]').forEach(inp => {
+      const multiline = inp.tagName === 'TEXTAREA';   // the Notes field
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Tab') {
+          // walk the new-entry fields: start -> end -> client -> engagement -> Notes
+          e.preventDefault();
+          readNewFields();
+          const order = ['start', 'end', 'client', 'engagement', 'description'];
+          const i = order.indexOf(inp.dataset.newfield);
+          const nextKey = e.shiftKey ? order[i - 1] : order[i + 1];
+          if (!nextKey) { if (!e.shiftKey) saveNewRow(); return; }   // tab past Notes saves; shift-tab past start stays
+          if (nextKey === 'client') {
+            // opening the client cell needs a re-render (the suggestion popup); keep focus on it
+            S.newClientOpen = true; render();
+            const c = $root().querySelector('#rt-new-client'); if (c) c.focus();
+            return;
+          }
+          if (inp.dataset.newfield === 'client' && S.newClientOpen) { S.newClientOpen = false; render(); }
+          const t = $root().querySelector('[data-newfield="' + nextKey + '"]');
+          if (t) { t.focus(); try { if (t.setSelectionRange) t.setSelectionRange(t.value.length, t.value.length); } catch {} }
+          return;
+        }
+        if (e.key === 'Enter' && (!multiline || e.metaKey || e.ctrlKey)) { e.preventDefault(); saveNewRow(); }
+        else if (e.key === 'Escape') { e.preventDefault(); discardNewRow(); }
+        // plain Enter in Notes = newline
+      });
+      if (inp.dataset.newfield === 'start' || inp.dataset.newfield === 'end') {
+        inp.addEventListener('input', () => {
+          const d = durBetween(
+            root.querySelector('[data-newfield="start"]').value,
+            root.querySelector('[data-newfield="end"]').value);
+          const out = root.querySelector('#rt-new-dur'); if (out && d) out.textContent = d;
+        });
+      }
+      if (inp.dataset.newfield === 'client') {
+        inp.addEventListener('focus', () => {
+          if (!S.newClientOpen) {
+            readNewFields(); S.newClientOpen = true; render();
+            // render() rebuilt the input — put focus back on it (its own focus handler no-ops now)
+            const c = $root().querySelector('#rt-new-client'); if (c) c.focus();
+          }
+        });
+        inp.addEventListener('input', () => {
+          readNewFields();
+          const pop = root.querySelector('.rt-clientpop');
+          if (pop) {
+            pop.outerHTML = clientPopupHTML(inp.value);
+            root.querySelectorAll('.rt-clientpop [data-act="pick-client"], .rt-clientpop [data-act="new-client"]').forEach(it => {
+              it.addEventListener('click', (e2) => {
+                e2.preventDefault(); e2.stopPropagation();
+                if (it.dataset.act === 'new-client') { registerNewClientFromInput(); return; }
+                readNewFields(); S.newRow.client = it.dataset.client; S.newClientOpen = false; render();
+                const ee = root.querySelector('[data-newfield="engagement"]'); if (ee) ee.focus();
+              });
+            });
+          }
+        });
+      }
+    });
+  }
+
+  // global Escape closes modal
+  document.onkeydown = (e) => {
+    if (e.key === 'Escape' && S.unlockId) { S.unlockId = null; render(); }
+  };
+}
+
+// keep mousedown inside a client popup from blurring (and prematurely
+// committing) the field it belongs to — bound once on the stable #root
+$root().addEventListener('mousedown', (e) => { if (e.target.closest('.rt-clientpop')) e.preventDefault(); });
+
+// if a deferred delete is still pending when the page is unloaded, commit it
+window.addEventListener('pagehide', () => { flushUndo(); });
+window.addEventListener('beforeunload', () => { flushUndo(); });
+
+// boot: render the loading shell, then pull clients + today's entries
+render();
+loadClients();
+loadRange('today');
+
+// the export page (or the timer) may have changed the data while this tab
+// was open — refresh when it regains focus.
+window.addEventListener('focus', () => { if (!S.editing && !S.newRow && !S.undo) refresh(); });
+})();
+</script>
+</body>
+</html>

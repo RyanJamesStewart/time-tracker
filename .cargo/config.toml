@@ -1,0 +1,13 @@
+# Static C runtime linkage for the MSVC target.
+#
+# Default Rust-on-MSVC builds dynamically link to vcruntime140.dll / msvcp140.dll,
+# which only exist on machines that have the Visual C++ Redistributable installed
+# (every dev box has it; many fresh end-user boxes don't). On a clean Windows
+# install the app fails to launch with
+#     "The code execution cannot proceed because vcruntime140.dll was not found."
+#
+# `+crt-static` bakes the runtime into the .exe so the .msix is fully
+# self-sufficient — no framework dependency, no redistributable to install,
+# nothing to fetch on first launch. Costs ~150 KB on the binary.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
