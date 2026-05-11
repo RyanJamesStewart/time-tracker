@@ -115,6 +115,7 @@ pub fn start(
                     .route("/favicon.ico", get(favicon_ico))
                     .route("/ws", get(ws_upgrade))
                     .route("/history", get(history_json))
+                    .route("/today", get(today_json))
                     .route("/workstreams", get(workstreams_json).post(add_workstream))
                     .route("/timer/start", post(timer_start))
                     .route("/timer/stop", post(timer_stop))
@@ -910,6 +911,61 @@ fn stems_for_window(window: Option<(NaiveDate, NaiveDate)>) -> Vec<String> {
             all.into_iter().filter(|s| *s >= lo && *s <= hi).collect()
         }
     }
+}
+
+/// 12-hour clock string in the popover's style: "9:08a", "1:42p", "12:30p", "12:05a".
+fn clock12(t: chrono::NaiveTime) -> String {
+    use chrono::Timelike;
+    let (h12, ap) = match t.hour() {
+        0 => (12, 'a'),
+        h @ 1..=11 => (h, 'a'),
+        12 => (12, 'p'),
+        h => (h - 12, 'p'),
+    };
+    format!("{h12}:{:02}{ap}", t.minute())
+}
+
+/// GET /today — the popover's "Today" tab. Real data only: the recorded
+/// entries whose timestamp lands on today's local date, plus the live timer
+/// (if one is running) as a trailing `running` row. Shape:
+/// `{ now_min, entries: [{ start, end, start_min, end_min, client,
+/// engagement, billable, narrative, running }, ...] }`. (Before this existed
+/// the popover fell back to a hard-coded mock day, which is the "random data"
+/// users saw — there is none anymore.)
+async fn today_json() -> impl IntoResponse {
+    use chrono::Timelike;
+    let now = Local::now();
+    let today = now.date_naive();
+    let now_min = (now.time().hour() * 60 + now.time().minute()) as i64;
+    let to_min = |t: chrono::NaiveTime| (t.hour() * 60 + t.minute()) as i64;
+
+    let mut entries: Vec<serde_json::Value> = entries_in_range("today")
+        .into_iter()
+        .map(|r| {
+            let end_t = r.timestamp.time();
+            let start_t = (r.timestamp - ChronoDuration::minutes(r.minutes)).time();
+            serde_json::json!({
+                "start": clock12(start_t), "end": clock12(end_t),
+                "start_min": to_min(start_t), "end_min": to_min(end_t),
+                "client": r.client, "engagement": r.engagement,
+                "billable": r.billable, "narrative": r.narrative, "running": false,
+            })
+        })
+        .collect();
+
+    if let Some(rt) = time_tracker::timer::Timer::load().peek() {
+        let same_day = rt.started_at.date_naive() == today;
+        let start_t = if same_day { rt.started_at.time() } else { chrono::NaiveTime::MIN };
+        entries.push(serde_json::json!({
+            "start": clock12(start_t), "end": "now",
+            "start_min": to_min(start_t), "end_min": now_min,
+            "client": rt.client, "engagement": rt.engagement,
+            "billable": true, "narrative": rt.narrative, "running": true,
+        }));
+    }
+
+    entries.sort_by_key(|e| e["start_min"].as_i64().unwrap_or(0));
+    (StatusCode::OK, Json(serde_json::json!({ "now_min": now_min, "entries": entries })))
 }
 
 /// All entries in a range, newest-first.

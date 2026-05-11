@@ -424,8 +424,8 @@ pub fn run() {
     let header = MenuItem::new(format!("{APP_NAME} v{APP_VERSION}"), false, None);
     #[cfg(feature = "live-view")]
     let add_workstream_menu = MenuItem::new("Add workstream  (Ctrl+Shift+H)", true, None);
-    let timer_start_menu = MenuItem::new("Start timer  (Ctrl+Shift+;)", true, None);
-    let timer_stop_menu = MenuItem::new("Stop timer  (Ctrl+Shift+')", true, None);
+    let timer_start_menu = MenuItem::new("Start timer…", true, None);
+    let timer_stop_menu = MenuItem::new("Stop timer  (Ctrl+Shift+' or ;)", true, None);
     // v0.2: "quick entry" lost its hotkey (Ctrl+Shift+H now adds a
     // workstream); kept here as "Log a block…" until Recorded Time's
     // write path lands. In a tray-only build (no live-view) it stays the
@@ -600,9 +600,17 @@ pub fn run() {
                     popup.show(PopupMode::QuickEntry, "hotkey");
                 }
             } else if hk.id == hotkey_ids.timer_start {
-                usage_loop.hotkey_fire("timer_start", true);
-                live_bus.hotkey("timer_start");
-                popup.show(PopupMode::TimerStart, "hotkey");
+                // v0.3: Ctrl+Shift+; no longer pops the start-timer prompt — in
+                // practice you start a timer by picking a workstream in the
+                // popover (Enter on the list) or via Ctrl+Shift+H. This slot now
+                // mirrors Ctrl+Shift+' (stop + write the entry, no popup) so
+                // muscle memory for either key just stops the timer.
+                usage_loop.hotkey_fire("timer_stop", true);
+                live_bus.hotkey("timer_stop");
+                #[cfg(feature = "live-view")]
+                popup.cmd_timer_stop();
+                #[cfg(not(feature = "live-view"))]
+                popup.show(PopupMode::TimerStop, "hotkey");
             } else if hk.id == hotkey_ids.timer_stop {
                 usage_loop.hotkey_fire("timer_stop", true);
                 live_bus.hotkey("timer_stop");

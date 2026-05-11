@@ -150,6 +150,7 @@
   .pv-fdrop .it { padding:7px 11px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--rule); cursor:pointer; color:var(--ink); }
   .pv-fdrop .it:first-child { border-top:0; }
   .pv-fdrop .it:hover, .pv-fdrop .it.active { background:var(--signal-soft); }
+  .pv-fdrop .new:hover, .pv-fdrop .new.active { background:var(--signal-soft); color:var(--ink); }
   .pv-fdrop .it .nm { flex:1; }
   .pv-fdrop .it.muted { color:var(--ink-3); }
   .pv-fdrop .it .rt { font-family:var(--mono); font-size:10.5px; color:var(--ink-4); }
@@ -363,6 +364,7 @@ const S = {
   note: SEED_NOTE,
   addStage: 'client',         // 'client' | 'engagement' | 'billable'
   addClient: '', addEngagement: '', addBillable: true,
+  addSel: 0,                  // highlighted row in the client/engagement suggestion dropdown (↓/↑ move it, Enter picks it)
   addBusy: false,             // POST /workstreams in flight
   openedFromClosed: false,    // popover was opened by Ctrl+Shift+H from a closed state → Esc closes it
   switchToast: null,          // { secs, timer, fromEng }
@@ -650,20 +652,40 @@ const KNOWN_CLIENTS = () => {
   const set = new Set(S.list.map(w => w.client));
   return [...set].sort();
 };
+/* the suggestion list shown under the focused add-form field — client names
+   (matching what's typed) on the 'client' stage, this client's engagements on
+   the 'engagement' stage. The single source for what ↓/↑/Enter operate on so
+   the highlighted index always lines up with what's rendered. */
+function addMatchList() {
+  if (S.addStage === 'client') {
+    const q = S.addClient.trim().toLowerCase();
+    return KNOWN_CLIENTS().filter(c => !q || c.toLowerCase().includes(q));
+  }
+  if (S.addStage === 'engagement') {
+    const cl = S.addClient.trim().toLowerCase();
+    if (!cl) return [];
+    return [...new Set(S.list.filter(w => w.client.toLowerCase() === cl).map(w => w.engagement))];
+  }
+  return [];
+}
 function addForm() {
   const st = S.addStage;
   const clientFocus = st === 'client';
   const engFocus = st === 'engagement';
   const engDisabled = !S.addClient.trim();
-  const clientMatches = KNOWN_CLIENTS().filter(c => !S.addClient.trim() || c.toLowerCase().includes(S.addClient.trim().toLowerCase()));
-  const engMatches = engDisabled ? [] : [...new Set(S.list.filter(w => w.client === S.addClient.trim() || w.client.toLowerCase() === S.addClient.trim().toLowerCase()).map(w => w.engagement))];
+  const matches = (clientFocus || engFocus) ? addMatchList() : [];
+  // clamp the highlight: 0..matches.length, where matches.length is the "+ New …" row
+  const sel = Math.max(0, Math.min(S.addSel | 0, matches.length));
+  S.addSel = sel;
+  const clientMatches = clientFocus ? matches : [];
+  const engMatches = engFocus ? matches : [];
   const clientDrop = clientFocus ? `<div class="pv-fdrop">
-      ${clientMatches.map((c,i) => `<div class="it${i===0?' active':''}" data-act="pick-client" data-v="${esc(c)}"><span class="nm">${esc(c)}</span></div>`).join('')}
-      <div class="new" data-act="pick-client" data-v="${esc(S.addClient.trim())}">${'<span class="pv-mono" style="color:var(--ink-4)">+</span>'} New client${S.addClient.trim()?` “${esc(S.addClient.trim())}”`:''}…</div>
+      ${clientMatches.map((c,i) => `<div class="it${i===sel?' active':''}" data-act="pick-client" data-v="${esc(c)}"><span class="nm">${esc(c)}</span></div>`).join('')}
+      <div class="new${sel===matches.length?' active':''}" data-act="pick-client" data-v="${esc(S.addClient.trim())}">${'<span class="pv-mono" style="color:var(--ink-4)">+</span>'} New client${S.addClient.trim()?` “${esc(S.addClient.trim())}”`:''}…</div>
     </div>` : '';
   const engDrop = engFocus ? `<div class="pv-fdrop">
-      ${engMatches.length ? engMatches.map((e,i) => `<div class="it${i===0&&!S.addEngagement?' active':''}" data-act="pick-eng" data-v="${esc(e)}"><span class="nm">${esc(e)}</span></div>`).join('') : `<div class="it muted"><span class="nm">No engagements yet for this client</span></div>`}
-      <div class="new" data-act="pick-eng" data-v="${esc(S.addEngagement.trim())}">${'<span class="pv-mono" style="color:var(--ink-4)">+</span>'} New engagement${S.addEngagement.trim()?` “${esc(S.addEngagement.trim())}”`:''}…</div>
+      ${engMatches.length ? engMatches.map((e,i) => `<div class="it${i===sel?' active':''}" data-act="pick-eng" data-v="${esc(e)}"><span class="nm">${esc(e)}</span></div>`).join('') : `<div class="it muted"><span class="nm">No engagements yet for this client</span></div>`}
+      <div class="new${sel===matches.length?' active':''}" data-act="pick-eng" data-v="${esc(S.addEngagement.trim())}">${'<span class="pv-mono" style="color:var(--ink-4)">+</span>'} New engagement${S.addEngagement.trim()?` “${esc(S.addEngagement.trim())}”`:''}…</div>
     </div>` : '';
   return `<div class="pv-add">
     <div class="pv-add-head">${combo(['Ctrl','Shift','H'])}<span class="pv-lbl" style="color:var(--signal-ink)">add workstream</span><span class="sp"></span><span class="next">${combo(['Tab'],true)} next field</span></div>
@@ -850,13 +872,13 @@ function cancelSwitchToast() { if (S.switchToast && S.switchToast.timer) clearIn
 function openAddForm(fromClosed) {
   if (S.adding) {
     // already adding (H pressed again) — just put the cursor back in the client field
-    S.addStage = 'client';
+    S.addStage = 'client'; S.addSel = 0;
     const el = document.getElementById('pv-add-client'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
     return;
   }
   cancelSwitchToast();
   S.openedFromClosed = !!fromClosed;
-  S.adding = true; S.addStage = 'client'; S.addClient = ''; S.addEngagement = ''; S.addBillable = true; S.addBusy = false;
+  S.adding = true; S.addStage = 'client'; S.addClient = ''; S.addEngagement = ''; S.addBillable = true; S.addBusy = false; S.addSel = 0;
   // if we were on an empty panel, opening add still works
   render();
 }
@@ -868,10 +890,10 @@ function addAdvance() {
   readAddFields();
   if (S.addStage === 'client') {
     if (!S.addClient.trim()) return;
-    S.addStage = 'engagement'; render();
+    S.addStage = 'engagement'; S.addSel = 0; render();
   } else if (S.addStage === 'engagement') {
     // Tab from engagement -> billable focus (no input; just move on)
-    S.addStage = 'billable'; render();
+    S.addStage = 'billable'; S.addSel = 0; render();
   }
 }
 async function submitAdd(startTimer) {
@@ -1041,8 +1063,8 @@ function wire() {
         case 'add-bill': readAddFields(); S.addBillable = !S.addBillable; render(); break;
         case 'add-submit-start': submitAdd(true); break;
         case 'add-submit-only': submitAdd(false); break;
-        case 'pick-client': readAddFields(); S.addClient = el.dataset.v; S.addStage = 'engagement'; render(); break;
-        case 'pick-eng':    readAddFields(); S.addEngagement = el.dataset.v; S.addStage = 'billable'; render(); break;
+        case 'pick-client': readAddFields(); S.addClient = el.dataset.v; S.addStage = 'engagement'; S.addSel = 0; render(); break;
+        case 'pick-eng':    readAddFields(); S.addEngagement = el.dataset.v; S.addStage = 'billable'; S.addSel = 0; render(); break;
         case 'open-recorded':
           // open the full app in the default browser, not inside the popover's
           // own webview; the native shell also hides the popover afterward.
@@ -1061,12 +1083,32 @@ function wire() {
     root.querySelectorAll('[data-addf]').forEach(inp => {
       inp.addEventListener('input', () => {
         readAddFields();
-        // re-render the relevant dropdown only (cheap full re-render is fine here)
+        S.addSel = 0;   // the suggestion list just changed — re-highlight the top
         render();
       });
       inp.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); if (S.addStage === 'client') { addAdvance(); } else { submitAdd(true); } }
-        else if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); addAdvance(); }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault(); readAddFields();
+          S.addSel = (S.addSel | 0) + 1;   // addForm() clamps to the "+ New …" row
+          render();
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault(); readAddFields();
+          S.addSel = Math.max(0, (S.addSel | 0) - 1);
+          render();
+        } else if (e.key === 'Enter') {
+          e.preventDefault(); readAddFields();
+          const m = addMatchList(), sel = S.addSel | 0;
+          if (sel < m.length) {
+            // commit the highlighted suggestion (same as clicking it)
+            if (S.addStage === 'client')           { S.addClient = m[sel]; S.addSel = 0; S.addStage = 'engagement'; render(); }
+            else if (S.addStage === 'engagement')  { S.addEngagement = m[sel]; S.addSel = 0; S.addStage = 'billable'; render(); }
+            else submitAdd(true);
+          } else {
+            // "+ New …" row (or no matches) — use what's typed
+            if (S.addStage === 'client') addAdvance();
+            else submitAdd(true);
+          }
+        } else if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); addAdvance(); }
         else if (e.key === 'Escape') { e.preventDefault(); cancelAdd(); }
       });
     });

@@ -233,10 +233,10 @@ fn default_config_body(staff: &str, billable: bool) -> String {
          # Use this if another app already claimed a combo (the app shows a\n\
          # warning box on launch listing any that failed to register).\n\
          # [hotkeys]\n\
-         # quick_entry    = \"Ctrl+Shift+H\"   # in the live-view build this opens the popover's add-workstream form\n\
-         # timer_start    = \"Ctrl+Shift+;\"\n\
-         # timer_stop     = \"Ctrl+Shift+'\"\n\
-         # popover_toggle = \"Ctrl+Shift+/\"\n\
+         # quick_entry    = \"Ctrl+Shift+H\"   # opens the popover's add-workstream form\n\
+         # timer_start    = \"Ctrl+Shift+;\"   # v0.3: this slot now STOPS the timer (same as timer_stop) — starting happens via the popover\n\
+         # timer_stop     = \"Ctrl+Shift+'\"   # stop the running timer and write the entry (no popup)\n\
+         # popover_toggle = \"Ctrl+Shift+/\"   # show / hide the popover\n\
          \n\
          # [startup] — set enabled = false to stop the app arming autostart for\n\
          # itself. (Windows also has its own toggle: Settings → Apps → Startup.)\n\
