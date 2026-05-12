@@ -576,13 +576,35 @@ use std::path::PathBuf;
 
 use axum::extract::{Path as AxPath, Query};
 use chrono::{
-    Datelike, Duration as ChronoDuration, Local, NaiveDate, NaiveTime, TimeZone, Timelike,
+    Datelike, Duration as ChronoDuration, Local, NaiveDate, TimeZone,
 };
 
 const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
-const VERSION_COMMENT: &str = "# time-tracker v0.2\r\n";
+const VERSION_COMMENT: &str = "# time-tracker v0.3\r\n";
 const HEADER_V02: &str =
-    "timestamp_iso,staff,client,engagement,narrative,minutes,hours_decimal,billable,entry_method,workstream_id\r\n";
+    "date,staff,client,engagement,narrative,minutes,hours_decimal,billable,entry_method,workstream_id\r\n";
+
+/// Parse column 0 of a CSV data row into the entry's calendar date.
+/// v0.3 writes a plain `YYYY-MM-DD`; older files (v0.1/v0.2) wrote an ISO
+/// timestamp — accept those too and take the date part, so a never-edited
+/// legacy file still reads. `None` only if it's genuine garbage.
+fn parse_entry_date(s: &str) -> Option<NaiveDate> {
+    let s = s.trim();
+    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Some(d);
+    }
+    chrono::DateTime::parse_from_rfc3339(s).ok().map(|t| t.with_timezone(&Local).date_naive())
+}
+
+/// The `LocatedRow.timestamp` for a given date: local midnight. v0.3 entries
+/// have no clock time; this keeps the range/sort machinery (which works on
+/// `DateTime<Local>`) unchanged while only the date carries meaning.
+fn date_to_local_midnight(d: NaiveDate) -> chrono::DateTime<Local> {
+    Local
+        .from_local_datetime(&d.and_hms_opt(0, 0, 0).unwrap())
+        .single()
+        .unwrap_or_else(|| Local.from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap()))
+}
 
 // NOTE (B2/B4): the monthly CSV is *only* mutated through the single
 // `tt-csv-writer` thread now — `state.csv_writer.rewrite_blocking(stem, |bytes|
@@ -719,44 +741,46 @@ fn rewrite_err_response(r: RewriteResult) -> (StatusCode, Json<serde_json::Value
     }
 }
 
-// ---- time formatting ----------------------------------------------------
+// ---- duration formatting ------------------------------------------------
 
-fn fmt_clock(t: NaiveTime) -> String {
-    let h24 = t.hour();
-    let m = t.minute();
-    let ap = if h24 < 12 { "AM" } else { "PM" };
-    let mut h = h24 % 12;
-    if h == 0 {
-        h = 12;
-    }
-    format!("{h}:{m:02} {ap}")
-}
+/// A single entry can't be longer than a full day — multi-session days are
+/// just multiple entries. (The timer itself caps elapsed at 12h elsewhere.)
+const MAX_ENTRY_MINUTES: i64 = 24 * 60;
 
 fn fmt_dur(minutes: i64) -> String {
     let m = minutes.max(0);
     format!("{}:{:02}", m / 60, m % 60)
 }
 
-/// Parse "9:08 AM" -> NaiveTime. Returns None on garbage.
-fn parse_clock(s: &str) -> Option<NaiveTime> {
-    let s = s.trim();
-    let bytes = s.as_bytes();
-    // very small hand parser: "<h>:<mm> <AM|PM>"
-    let (hm, ap) = s.rsplit_once(' ')?;
-    let _ = bytes;
-    let (h_str, m_str) = hm.split_once(':')?;
-    let h: u32 = h_str.trim().parse().ok()?;
-    let m: u32 = m_str.trim().parse().ok()?;
-    if m > 59 || h == 0 || h > 12 {
+/// Parse a duration the user typed: `"H:MM"` ("1:30"), `"H:M"` ("1:5" → 1:05),
+/// a bare minute count (`"90"`), or `"1.5h"` / `"1.5"` (hours, decimal). Returns
+/// the duration in whole minutes, clamped to `[0, MAX_ENTRY_MINUTES]`. `None`
+/// on genuine garbage.
+fn parse_hm_dur(s: &str) -> Option<i64> {
+    let s = s.trim().trim_end_matches(['h', 'H']).trim();
+    if s.is_empty() {
         return None;
     }
-    let ap = ap.trim().to_ascii_uppercase();
-    let h24 = match ap.as_str() {
-        "AM" => h % 12,
-        "PM" => (h % 12) + 12,
-        _ => return None,
+    let mins = if let Some((h_str, m_str)) = s.split_once(':') {
+        let h: i64 = h_str.trim().parse().ok()?;
+        let m: i64 = m_str.trim().parse().ok()?;
+        if !(0..=59).contains(&m) || h < 0 {
+            return None;
+        }
+        h * 60 + m
+    } else if let Ok(m) = s.parse::<i64>() {
+        // a bare integer is taken as minutes
+        m
+    } else if let Ok(hrs) = s.parse::<f64>() {
+        // a decimal is hours ("1.5" = 90m)
+        (hrs * 60.0).round() as i64
+    } else {
+        return None;
     };
-    NaiveTime::from_hms_opt(h24, m, 0)
+    if mins < 0 {
+        return None;
+    }
+    Some(mins.min(MAX_ENTRY_MINUTES))
 }
 
 // ---- entry model returned to the pages ----------------------------------
@@ -765,9 +789,8 @@ fn parse_clock(s: &str) -> Option<NaiveTime> {
 struct ApiEntry {
     id: String,
     date: String, // YYYY-MM-DD
-    start: String,
-    end: String,
-    dur: String,
+    dur: String,  // "H:MM" — display form of `minutes`
+    minutes: i64, // duration worked; the editable number
     client: String,
     engagement: String,
     billable: bool,
@@ -781,6 +804,9 @@ struct LocatedRow {
     stem: String,
     /// 1-based index among data rows.
     n: usize,
+    /// Local midnight of the entry's date. v0.3 entries have no clock time;
+    /// only the calendar date matters — this stays a `DateTime<Local>` so the
+    /// range-window / sort helpers keep working unchanged.
     timestamp: chrono::DateTime<Local>,
     client: String,
     engagement: String,
@@ -799,14 +825,11 @@ impl LocatedRow {
     fn to_api(&self, manifest: &ExportManifest) -> ApiEntry {
         let id = self.id();
         let run_id = manifest.run_id_for_entry(&id);
-        let end_t = self.timestamp.time();
-        let start_t = (self.timestamp - ChronoDuration::minutes(self.minutes)).time();
         ApiEntry {
             id: id.clone(),
             date: self.date().format("%Y-%m-%d").to_string(),
-            start: fmt_clock(start_t),
-            end: fmt_clock(end_t),
             dur: fmt_dur(self.minutes),
+            minutes: self.minutes,
             client: self.client.clone(),
             engagement: self.engagement.clone(),
             billable: self.billable,
@@ -817,23 +840,22 @@ impl LocatedRow {
     }
 }
 
-/// Parse a `CsvFile`'s rows into `LocatedRow`s for a given stem. Rows that
-/// don't have a parseable timestamp / minutes are skipped.
+/// Parse a `CsvFile`'s rows into `LocatedRow`s for a given stem. Rows whose
+/// column 0 isn't a parseable date are skipped.
 fn locate_rows(stem: &str, file: &CsvFile) -> Vec<LocatedRow> {
     let mut out = Vec::new();
     for (i, fields) in file.rows.iter().enumerate() {
         if fields.len() < 8 {
             continue;
         }
-        let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&fields[0]) else {
+        let Some(date) = parse_entry_date(&fields[0]) else {
             continue;
         };
-        let ts = ts.with_timezone(&Local);
         let minutes: i64 = fields[5].parse().unwrap_or(0);
         out.push(LocatedRow {
             stem: stem.to_string(),
             n: i + 1,
-            timestamp: ts,
+            timestamp: date_to_local_midnight(date),
             client: fields[2].clone(),
             engagement: fields[3].clone(),
             narrative: fields[4].clone(),
@@ -920,59 +942,32 @@ fn stems_for_window(window: Option<(NaiveDate, NaiveDate)>) -> Vec<String> {
     }
 }
 
-/// 12-hour clock string in the popover's style: "9:08a", "1:42p", "12:30p", "12:05a".
-fn clock12(t: chrono::NaiveTime) -> String {
-    use chrono::Timelike;
-    let (h12, ap) = match t.hour() {
-        0 => (12, 'a'),
-        h @ 1..=11 => (h, 'a'),
-        12 => (12, 'p'),
-        h => (h - 12, 'p'),
-    };
-    format!("{h12}:{:02}{ap}", t.minute())
-}
-
-/// GET /today — the popover's "Today" tab. Real data only: the recorded
-/// entries whose timestamp lands on today's local date, plus the live timer
-/// (if one is running) as a trailing `running` row. Shape:
-/// `{ now_min, entries: [{ start, end, start_min, end_min, client,
-/// engagement, billable, narrative, running }, ...] }`. (Before this existed
-/// the popover fell back to a hard-coded mock day, which is the "random data"
-/// users saw — there is none anymore.)
+/// GET /today — the popover's "Today" tab. v0.3: entries are date + duration,
+/// so there's no timeline — we return today's recorded entries (with their
+/// minutes) plus, if a timer's running, its current running total. The popover
+/// rolls this up into a by-client summary. Shape:
+/// `{ entries: [{ client, engagement, billable, narrative, minutes }, ...],
+///   running: { client, engagement, narrative, minutes } | null }`.
 async fn today_json() -> impl IntoResponse {
-    use chrono::Timelike;
-    let now = Local::now();
-    let today = now.date_naive();
-    let now_min = (now.time().hour() * 60 + now.time().minute()) as i64;
-    let to_min = |t: chrono::NaiveTime| (t.hour() * 60 + t.minute()) as i64;
-
-    let mut entries: Vec<serde_json::Value> = entries_in_range("today")
+    let entries: Vec<serde_json::Value> = entries_in_range("today")
         .into_iter()
         .map(|r| {
-            let end_t = r.timestamp.time();
-            let start_t = (r.timestamp - ChronoDuration::minutes(r.minutes)).time();
             serde_json::json!({
-                "start": clock12(start_t), "end": clock12(end_t),
-                "start_min": to_min(start_t), "end_min": to_min(end_t),
                 "client": r.client, "engagement": r.engagement,
-                "billable": r.billable, "narrative": r.narrative, "running": false,
+                "billable": r.billable, "narrative": r.narrative, "minutes": r.minutes,
             })
         })
         .collect();
 
-    if let Some(rt) = time_tracker::timer::Timer::load().peek() {
-        let same_day = rt.started_at.date_naive() == today;
-        let start_t = if same_day { rt.started_at.time() } else { chrono::NaiveTime::MIN };
-        entries.push(serde_json::json!({
-            "start": clock12(start_t), "end": "now",
-            "start_min": to_min(start_t), "end_min": now_min,
+    let running = time_tracker::timer::Timer::load().peek().map(|rt| {
+        let mins = (Local::now() - rt.started_at).num_minutes().clamp(0, MAX_ENTRY_MINUTES);
+        serde_json::json!({
             "client": rt.client, "engagement": rt.engagement,
-            "billable": true, "narrative": rt.narrative, "running": true,
-        }));
-    }
+            "narrative": rt.narrative, "minutes": mins,
+        })
+    });
 
-    entries.sort_by_key(|e| e["start_min"].as_i64().unwrap_or(0));
-    (StatusCode::OK, Json(serde_json::json!({ "now_min": now_min, "entries": entries })))
+    (StatusCode::OK, Json(serde_json::json!({ "entries": entries, "running": running })))
 }
 
 /// All entries in a range, newest-first.
@@ -996,7 +991,8 @@ fn entries_in_range(range: &str) -> Vec<LocatedRow> {
             }
         }
     }
-    rows.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    // newest date first; within a day (same stem) the later-appended row first
+    rows.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then(b.n.cmp(&a.n)));
     rows
 }
 
@@ -1188,17 +1184,21 @@ async fn api_entries_list(Query(q): Query<EntriesQuery>) -> impl IntoResponse {
 
 #[derive(serde::Deserialize)]
 struct PatchEntryBody {
-    start: Option<String>,
-    end: Option<String>,
+    /// New date `YYYY-MM-DD`. Must stay in the same month (a cross-month move
+    /// would have to relocate the row to another monthly file — delete + re-add
+    /// for that). `dur` here is what the user typed: "1:30", "90", "1.5", …
+    date: Option<String>,
+    dur: Option<String>,
     client: Option<String>,
     engagement: Option<String>,
     narrative: Option<String>,
     billable: Option<bool>,
 }
 
-/// Apply a PATCH to one row, in place. Returns Err with a human message
-/// (used both for pre-validation and inside the rewrite transform).
-fn apply_patch_to_row(file: &mut CsvFile, n: usize, body: &PatchEntryBody) -> Result<(), String> {
+/// Apply a PATCH to one row, in place. `stem` is the monthly-file stem the row
+/// lives in (used to reject cross-month date edits). Returns Err with a human
+/// message (used both for pre-validation and inside the rewrite transform).
+fn apply_patch_to_row(file: &mut CsvFile, stem: &str, n: usize, body: &PatchEntryBody) -> Result<(), String> {
     if n == 0 || n > file.rows.len() {
         return Err("no such entry".to_string());
     }
@@ -1207,41 +1207,21 @@ fn apply_patch_to_row(file: &mut CsvFile, n: usize, body: &PatchEntryBody) -> Re
     while row.len() < ncols {
         row.push(String::new());
     }
-    let cur_ts = chrono::DateTime::parse_from_rfc3339(&row[0])
-        .map(|t| t.with_timezone(&Local))
-        .map_err(|_| "entry has an unparseable timestamp".to_string())?;
-    let date = cur_ts.date_naive();
-    let cur_minutes: i64 = row[5].parse().unwrap_or(0);
 
-    let new_start_t = match &body.start {
-        Some(s) => Some(parse_clock(s).ok_or_else(|| "could not parse start time".to_string())?),
-        None => None,
-    };
-    let new_end_t = match &body.end {
-        Some(s) => Some(parse_clock(s).ok_or_else(|| "could not parse end time".to_string())?),
-        None => None,
-    };
-
-    // R3 (export review): only touch the timestamp/minutes/hours columns when
-    // start or end actually changed — a narrative-only PATCH must not re-serialize
-    // column 0 and lose sub-second precision.
-    if new_start_t.is_some() || new_end_t.is_some() {
-        let end_t = new_end_t.unwrap_or_else(|| cur_ts.time());
-        let old_start_t = (cur_ts - ChronoDuration::minutes(cur_minutes)).time();
-        let start_t = new_start_t.unwrap_or(old_start_t);
-        let mut new_minutes = end_t.signed_duration_since(start_t).num_minutes();
-        if new_minutes < 0 {
-            new_minutes += 24 * 60; // crossed midnight
+    if let Some(d_str) = &body.date {
+        let d = NaiveDate::parse_from_str(d_str.trim(), "%Y-%m-%d")
+            .map_err(|_| "could not parse the date (want YYYY-MM-DD)".to_string())?;
+        let row_stem = format!("{:04}-{:02}", d.year(), d.month());
+        if row_stem != stem {
+            return Err("can't move an entry to a different month here — delete it and add it again".to_string());
         }
-        let new_ts = Local
-            .from_local_datetime(&date.and_time(end_t))
-            .single()
-            .unwrap_or(cur_ts);
-        row[0] = new_ts.to_rfc3339();
-        row[5] = new_minutes.to_string();
-        row[6] = format!("{:.2}", (new_minutes as f64) / 60.0);
+        row[0] = d.format("%Y-%m-%d").to_string();
     }
-
+    if let Some(dur_str) = &body.dur {
+        let mins = parse_hm_dur(dur_str).ok_or_else(|| "could not parse the duration (try \"1:30\" or \"90\")".to_string())?;
+        row[5] = mins.to_string();
+        row[6] = format!("{:.2}", (mins as f64) / 60.0);
+    }
     if let Some(c) = &body.client {
         row[2] = c.trim().to_string();
     }
@@ -1276,7 +1256,7 @@ async fn api_entries_patch(
     // code; the authoritative read-modify-write happens on the writer thread.
     match read_csv_file(&stem) {
         Some(mut f) => {
-            if let Err(msg) = apply_patch_to_row(&mut f, n, &body) {
+            if let Err(msg) = apply_patch_to_row(&mut f, &stem, n, &body) {
                 let status = if msg == "no such entry" {
                     StatusCode::NOT_FOUND
                 } else {
@@ -1291,12 +1271,13 @@ async fn api_entries_patch(
         None => {}
     }
     let stem_for_tx = stem.clone();
+    let stem_for_closure = stem.clone();
     let result = state.csv_writer.rewrite_blocking(
         &stem,
         Box::new(move |cur| {
             let bytes = cur.ok_or_else(|| "no CSV file for that entry".to_string())?;
             let mut file = CsvFile::parse(&String::from_utf8_lossy(bytes));
-            apply_patch_to_row(&mut file, n, &body)?;
+            apply_patch_to_row(&mut file, &stem_for_closure, n, &body)?;
             Ok(file.render())
         }),
     );
@@ -1320,8 +1301,8 @@ async fn api_entries_patch(
 #[derive(serde::Deserialize)]
 struct CreateEntryBody {
     date: String, // YYYY-MM-DD
-    start: String,
-    end: String,
+    /// Duration worked, as typed: "1:30", "90", "1.5", …
+    dur: String,
     client: String,
     engagement: String,
     #[serde(default)]
@@ -1340,24 +1321,17 @@ async fn api_entries_create(
     let Ok(date) = NaiveDate::parse_from_str(body.date.trim(), "%Y-%m-%d") else {
         return err_json(StatusCode::UNPROCESSABLE_ENTITY, "bad date (want YYYY-MM-DD)");
     };
-    let Some(start_t) = parse_clock(&body.start) else {
-        return err_json(StatusCode::UNPROCESSABLE_ENTITY, "could not parse start time");
+    let Some(minutes) = parse_hm_dur(&body.dur) else {
+        return err_json(StatusCode::UNPROCESSABLE_ENTITY, "could not parse the duration (try \"1:30\" or \"90\")");
     };
-    let Some(end_t) = parse_clock(&body.end) else {
-        return err_json(StatusCode::UNPROCESSABLE_ENTITY, "could not parse end time");
-    };
+    if minutes == 0 {
+        return err_json(StatusCode::UNPROCESSABLE_ENTITY, "duration must be greater than zero");
+    }
     if body.client.trim().is_empty() || body.engagement.trim().is_empty() {
         return err_json(StatusCode::UNPROCESSABLE_ENTITY, "client and engagement are required");
     }
-    let mut minutes = end_t.signed_duration_since(start_t).num_minutes();
-    if minutes < 0 {
-        minutes += 24 * 60;
-    }
     let stem = format!("{:04}-{:02}", date.year(), date.month());
-    let ts = Local
-        .from_local_datetime(&date.and_time(end_t))
-        .single()
-        .unwrap_or_else(Local::now);
+    let date_str = date.format("%Y-%m-%d").to_string();
     let staff = time_tracker::config::Config::load().identity.staff;
     let body_client = body.client.trim().to_string();
     let body_engagement = body.engagement.trim().to_string();
@@ -1377,7 +1351,7 @@ async fn api_entries_create(
                 None => CsvFile::fresh_v02(),
             };
             let mut row = vec![
-                ts.to_rfc3339(),
+                date_str,
                 staff,
                 body_client,
                 body_engagement,

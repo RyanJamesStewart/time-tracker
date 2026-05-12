@@ -348,19 +348,18 @@ const SEED_WORKSTREAMS = [
 ];
 const SEED_NOTE = 'Reviewing receivables aging schedule and tying out the trial balance.';
 
-/* ---------- mock "today" day-log (wire to /recorded?day=today via /today) ----------
- * startMin / endMin are minutes-since-midnight (drive the timeline + roll-up);
- * the running entry's end is "now" and its endMin == nowMin. */
+/* ---------- mock "today" log (replaced by GET /today in the real app) ----------
+ * v0.3: entries are date + duration — no clock time — so "today" is a by-client
+ * roll-up, not a timeline. Shape: { entries:[{client,engagement,billable,
+ * narrative,minutes}], running:{client,engagement,narrative,minutes}|null }. */
 const SEED_TODAY = {
-  nowMin: 14*60 + 51,   // 2:51 PM
   entries: [
-    { start:'9:08a',  end:'9:54a',  startMin: 9*60+8,   endMin: 9*60+54,  client:'Halden & Roe',     engagement:'Q1 Review', billable:true,  desc:'Reconciled cash, tied out AR aging.' },
-    { start:'9:54a',  end:'10:08a', startMin: 9*60+54,  endMin:10*60+8,   client:'Internal',         engagement:'Break',     billable:false, desc:null },
-    { start:'10:08a', end:'11:35a', startMin:10*60+8,   endMin:11*60+35,  client:'Halden & Roe',     engagement:'Audit',     billable:true,  desc:'Reviewed Q4 workpapers; flagged 3 items for partner.' },
-    { start:'11:35a', end:'12:30p', startMin:11*60+35,  endMin:12*60+30,  client:'Kuiper Logistics', engagement:'Month-end', billable:true,  desc:'Cleared backlog of bank rec exceptions.' },
-    { start:'12:30p', end:'1:42p',  startMin:12*60+30,  endMin:13*60+42,  client:'Internal',         engagement:'Lunch',     billable:false, desc:null },
-    { start:'1:42p',  end:'now',    startMin:13*60+42,  endMin:14*60+51,  client:'Halden & Roe',     engagement:'Q1 Review', billable:true,  desc:'Receivables aging, tying out the trial balance.', running:true },
+    { client:'Halden & Roe',     engagement:'Q1 Review',  billable:true,  narrative:'Reconciled cash, tied out AR aging.', minutes:135 },
+    { client:'Halden & Roe',     engagement:'Audit',      billable:true,  narrative:'Reviewed Q4 workpapers.',             minutes:87  },
+    { client:'Kuiper Logistics', engagement:'Month-end',  billable:true,  narrative:'Cleared bank rec exceptions.',        minutes:65  },
+    { client:'Internal',         engagement:'Admin',      billable:false, narrative:'',                                     minutes:30  },
   ],
+  running: { client:'Halden & Roe', engagement:'Q1 Review', narrative:'Tying out the trial balance.', minutes:42 },
 };
 
 /* ---------- state ---------- */
@@ -385,7 +384,7 @@ const S = {
   haveServer: false,          // GET /workstreams succeeded → POST is live
   emptyMode: null,            // null | 'first-run' | 'no-active'
   tab: 'workstreams',         // 'workstreams' | 'today' — which middle-zone list is showing
-  today: { nowMin: SEED_TODAY.nowMin, entries: SEED_TODAY.entries.map(e => ({ ...e })) },
+  today: { entries: SEED_TODAY.entries.map(e => ({ ...e })), running: SEED_TODAY.running ? { ...SEED_TODAY.running } : null },
 };
 let tickHandle = null;
 
@@ -406,30 +405,33 @@ function relTime(iso) {
 }
 
 /* ---------- "today" helpers ---------- */
-function nowMinutes() { const d = new Date(); return d.getHours()*60 + d.getMinutes(); }
 function fmtHM(mins) { mins = Math.max(0, Math.round(mins)); return `${Math.floor(mins/60)}h ${pad2(mins%60)}m`; }
 function durHM(mins) { mins = Math.max(0, Math.round(mins)); return `${Math.floor(mins/60)}:${pad2(mins%60)}`; }
-function todayRollup(entries) {
-  let total = 0, bill = 0; const cs = new Set(), es = new Set();
-  for (const e of entries) {
-    const d = Math.max(0, e.endMin - e.startMin);
-    total += d; if (e.billable) bill += d;
-    cs.add(e.client); es.add(e.client + '∷' + e.engagement);
+/* roll today's date+duration entries (plus the live timer, if any) up by
+   client → engagement. Returns total/billable minutes, distinct counts, and
+   the rows (one per client+engagement pair, sorted by minutes desc). */
+function todayRollup2(entries, running) {
+  const all = (entries || []).slice();
+  if (running) all.push({ client: running.client, engagement: running.engagement, billable: true, minutes: running.minutes, _running: true });
+  let total = 0, bill = 0;
+  const byCE = new Map();   // "client∷eng" -> { client, eng, minutes, billable, running }
+  for (const e of all) {
+    const m = Math.max(0, e.minutes | 0);
+    total += m; if (e.billable !== false) bill += m;
+    const k = (e.client || '—') + '∷' + (e.engagement || '');
+    const cur = byCE.get(k) || { client: e.client || '—', eng: e.engagement || '', minutes: 0, billable: false, running: false };
+    cur.minutes += m;
+    if (e.billable !== false) cur.billable = true;
+    if (e._running) cur.running = true;
+    byCE.set(k, cur);
   }
-  return { total: fmtHM(total), billable: fmtHM(bill), clients: cs.size, engagements: es.size };
+  const clients = new Set([...byCE.values()].map(r => r.client)).size;
+  const rows = [...byCE.values()].sort((a, b) => b.minutes - a.minutes || a.client.toLowerCase().localeCompare(b.client.toLowerCase()));
+  return { total, bill, clients, engagements: byCE.size, rows };
 }
-/* stable hue for a billable client; non-billable rows get the grey hatch instead */
+/* stable hue for a client's pip dot; non-billable rows get a hollow dot instead */
 const TL_PALETTE = ['#1361FF', '#0A3FA8', '#7AA7FF', '#3F8FFF'];
-function clientColor(name) { let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0; return TL_PALETTE[h % TL_PALETTE.length]; }
-/* whole-hour [lo,hi] window for the timeline — defaults 9a–6p, widened to fit the data + now */
-function dayWindow(entries, nowMin) {
-  let lo = 9*60, hi = 18*60;
-  for (const e of entries) { lo = Math.min(lo, e.startMin); hi = Math.max(hi, e.endMin); }
-  lo = Math.min(lo, nowMin); hi = Math.max(hi, nowMin);
-  lo = Math.floor(lo/60)*60; hi = Math.ceil(hi/60)*60;
-  if (hi - lo < 60) hi = lo + 60;
-  return [lo, hi];
-}
+function clientColor(name) { let h = 0; name = String(name || ''); for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0; return TL_PALETTE[h % TL_PALETTE.length]; }
 
 /* GET /workstreams → replace the switcher list. Silently keeps mock data on failure. */
 async function loadWorkstreams() {
@@ -460,10 +462,10 @@ async function loadWorkstreams() {
   if (S.emptyMode == null) render();
 }
 
-/* GET /today → replace the day log. Silently keeps the seed on failure.
- * Accepts either a bare array of entries or { now_min, entries:[...] }.
- * Entry shape: { start, end, start_min, end_min, client, engagement,
- *                billable, narrative|desc, running }. */
+/* GET /today → replace the day's entries + the live timer total. Silently keeps
+ * the seed on failure. Shape: { entries:[{client,engagement,billable,narrative,
+ * minutes}], running:{client,engagement,narrative,minutes}|null } (also tolerates
+ * a bare array of entries). */
 async function loadToday() {
   let data;
   try {
@@ -471,19 +473,19 @@ async function loadToday() {
     if (!r.ok) return;
     data = await r.json();
   } catch { return; }
-  const rows = Array.isArray(data) ? data : (data && Array.isArray(data.entries) ? data.entries : null);
-  if (!rows) return;
-  const mins = (v) => Number.isFinite(+v) ? +v : 0;
+  if (!data || typeof data !== 'object') return;
+  const rows = Array.isArray(data) ? data : (Array.isArray(data.entries) ? data.entries : []);
+  const mins = (v) => Math.max(0, Number.isFinite(+v) ? Math.round(+v) : 0);
   S.today = {
-    nowMin: (data && Number.isFinite(+data.now_min)) ? +data.now_min : nowMinutes(),
     entries: rows.map(e => ({
-      start: e.start || '', end: e.end || (e.running ? 'now' : ''),
-      startMin: mins(e.start_min), endMin: mins(e.end_min),
       client: e.client || '—', engagement: e.engagement || '',
       billable: e.billable !== false,
-      desc: e.narrative || e.desc || null,
-      running: !!e.running,
+      narrative: e.narrative || e.desc || '',
+      minutes: mins(e.minutes),
     })),
+    running: (data.running && typeof data.running === 'object')
+      ? { client: data.running.client || '—', engagement: data.running.engagement || '', narrative: data.running.narrative || '', minutes: mins(data.running.minutes) }
+      : null,
   };
   if (S.tab === 'today' && !qp().has('ref')) render();
 }
@@ -592,7 +594,8 @@ function switcher() {
 
 /* ---------- tab strip: Workstreams | Today ---------- */
 function tabStrip() {
-  const total = todayRollup(S.today.entries).total;
+  const r = todayRollup2(S.today.entries, S.today.running);
+  const total = r.total > 0 ? fmtHM(r.total) : null;
   const tab = (id, label, meta) => {
     const on = S.tab === id;
     return `<button class="pv-tab${on ? ' on' : ''}" data-act="tab" data-v="${id}"${on ? ' aria-current="page"' : ''}><span class="t">${esc(label)}</span>${meta ? `<span class="m">· ${esc(meta)}</span>` : ''}</button>`;
@@ -605,73 +608,39 @@ function tabStrip() {
   </div>`;
 }
 
-/* ---------- today panel: roll-up · timeline · entry list ---------- */
+/* ---------- today panel: roll-up counters + by-client summary ---------- */
 function todayCounters(s) {
   const cell = (k, v, bill) => `<div class="pv-counter${bill ? ' bill' : ''}"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`;
   return `<div class="pv-counters">${cell('total', s.total)}${cell('billable', s.billable, true)}${cell('clients', String(s.clients))}${cell('engagements', String(s.engagements))}</div>`;
-}
-function todayTimeline(entries, nowMin, lo, hi, bare) {
-  const span = Math.max(1, hi - lo);
-  const pct = (m) => ((Math.max(lo, Math.min(hi, m)) - lo) / span) * 100;
-  let ticks = '';
-  for (let m = lo; m <= hi; m += 120) {
-    const h24 = Math.floor(m / 60);
-    const h = h24 === 0 ? 12 : (h24 > 12 ? h24 - 12 : h24);
-    const ap = h24 >= 12 ? 'p' : 'a';
-    ticks += `<span class="pv-tl-tick" style="left:${pct(m).toFixed(3)}%">${h}${ap}</span>`;
-  }
-  const np = pct(nowMin);
-  const blocks = entries.map(e => {
-    const left = pct(e.startMin);
-    const w = Math.max(0.4, pct(e.endMin) - left);
-    const cls = 'pv-tl-blk' + (e.billable ? '' : ' nb') + (e.running ? ' run' : '');
-    const bg = e.billable ? clientColor(e.client) : '#C7CCD0';
-    return `<div class="${cls}" style="left:${left.toFixed(3)}%;width:${w.toFixed(3)}%;background:${bg}" title="${esc(e.client)} · ${esc(e.engagement)} · ${esc(durHM(e.endMin - e.startMin))}"></div>`;
-  }).join('');
-  return `<div class="pv-timeline${bare ? ' bare' : ''}">
-    <div class="pv-tl-track">${blocks}<div class="pv-tl-now" style="left:${np.toFixed(3)}%"></div><div class="pv-tl-nowdot" style="left:${np.toFixed(3)}%"></div></div>
-    <div class="pv-tl-axis">${ticks}<span class="pv-tl-tick now" style="left:${np.toFixed(3)}%">now</span></div>
-  </div>`;
-}
-function editGlyph() {
-  return `<svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><path d="M1.5 9.5 L1.5 7.5 L7 2 L9 4 L3.5 9.5 Z M6.5 2.5 L8.5 4.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-}
-function todayRow(e) {
-  const run = !!e.running;
-  const pip = run ? `<span class="d run"></span>`
-    : e.billable ? `<span class="d" style="background:${clientColor(e.client)}"></span>`
-    : `<span class="d nb"></span>`;
-  const dur = durHM(e.endMin - e.startMin);
-  const desc = e.desc ? `<span class="ds"> &nbsp;${esc(e.desc)}</span>` : '';
-  const nb = e.billable ? '' : `<span class="nb"> · non-billable</span>`;
-  // closed rows get a hover "edit" affordance that opens the full Recorded Time
-  // page (heavy edits stay there); the running row is read-only.
-  const pencil = run ? '' : `<button class="edit" data-act="open-recorded" title="edit in Recorded Time" aria-label="edit in Recorded Time">${editGlyph()}</button>`;
-  return `<div class="pv-trow${run ? ' run' : ''}">
-    <div class="l1">
-      <div class="pip">${pip}</div>
-      <div class="rng">${esc(e.start)}<span class="dash">–</span>${esc(e.end)}</div>
-      <div class="cl${e.billable ? '' : ' nb'}">${esc(e.client)}</div>
-      <div class="dur${e.billable ? '' : ' nb'}">${esc(dur)}${run ? '<span class="tk"></span>' : ''}</div>
-    </div>
-    <div class="l2"><div></div><div></div>
-      <div class="meta"><span class="eng${e.billable ? '' : ' nb'}">${esc(e.engagement)}</span>${nb}${desc}</div>
-    </div>
-    ${pencil}
-  </div>`;
 }
 function todayEmpty() {
   return `<div class="pv-today-empty"><div class="h">Nothing logged yet today.</div>
     <div class="p">Switch to ${combo(['←'])} Workstreams, pick one, and press ${combo(['↵'])} to start the timer.</div></div>`;
 }
+/* one summary line per client+engagement pair worked today */
+function todaySummaryRow(row) {
+  const nb = row.billable === false;
+  const pip = row.running ? `<span class="d run"></span>`
+    : nb ? `<span class="d nb"></span>`
+    : `<span class="d" style="background:${clientColor(row.client)}"></span>`;
+  return `<div class="pv-trow${row.running ? ' run' : ''}">
+    <div class="l1">
+      <div class="pip">${pip}</div>
+      <div class="cl${nb ? ' nb' : ''}" style="grid-column:span 2">${esc(row.client)}</div>
+      <div class="dur${nb ? ' nb' : ''}">${esc(durHM(row.minutes))}${row.running ? '<span class="tk"></span>' : ''}</div>
+    </div>
+    <div class="l2"><div></div>
+      <div class="meta" style="grid-column:2 / -1"><span class="eng${nb ? ' nb' : ''}">${esc(row.eng || '—')}</span>${nb ? '<span class="nb"> · non-billable</span>' : ''}${row.running ? ' <span class="eng">· running now</span>' : ''}</div>
+    </div>
+  </div>`;
+}
 function todayPanel() {
-  const entries = [...S.today.entries].sort((a, b) => a.startMin - b.startMin);
-  const empty = entries.length === 0;
-  const stats = empty ? { total:'0h 00m', billable:'0h 00m', clients:0, engagements:0 } : todayRollup(entries);
-  const [lo, hi] = dayWindow(empty ? [] : entries, S.today.nowMin);
-  return todayCounters(stats)
-    + todayTimeline(empty ? [] : entries, S.today.nowMin, lo, hi, empty)
-    + (empty ? todayEmpty() : `<div class="pv-today">${entries.map(todayRow).join('')}</div>`);
+  const r = todayRollup2(S.today.entries, S.today.running);
+  if (r.rows.length === 0) {
+    return todayCounters({ total:'0h 00m', billable:'0h 00m', clients:0, engagements:0 }) + todayEmpty();
+  }
+  const counters = todayCounters({ total: fmtHM(r.total), billable: fmtHM(r.bill), clients: String(r.clients), engagements: String(r.engagements) });
+  return counters + `<div class="pv-today">${r.rows.map(todaySummaryRow).join('')}</div>`;
 }
 
 function actionBar() {

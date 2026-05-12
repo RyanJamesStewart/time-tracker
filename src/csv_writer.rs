@@ -33,15 +33,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::usage::Usage;
 
-// v0.2 file layout: a version banner line, then the column header (one
-// more column than v0.1 — `workstream_id`), then CRLF rows. Lines
-// starting with `#` are comments, skipped by all parsers. v0.1 CSVs (no
-// banner, 9 columns) are still read fine via the client+engagement
-// fallback; a pre-existing v0.1 monthly file keeps getting v0.1-shaped
-// rows appended so it stays internally consistent — only files *created*
-// by v0.2 get the new format.
-const VERSION_COMMENT: &[u8] = b"# time-tracker v0.2\r\n";
-const HEADER: &[u8] = b"timestamp_iso,staff,client,engagement,narrative,minutes,hours_decimal,billable,entry_method,workstream_id\r\n";
+// File layout: a version banner line, then the column header, then CRLF
+// rows. Lines starting with `#` are comments, skipped by all parsers.
+//
+// v0.3 (2026-05-11): column 0 is a plain `date` (YYYY-MM-DD), not an ISO
+// timestamp. Entries are date + duration, full stop — no begin/end clock
+// time anywhere (a timer still runs against wall time internally, but only
+// the date it landed on and the minutes worked are recorded). Parsers also
+// accept the old `timestamp_iso` form (anything with a `T`) and use its
+// date part, so v0.1/v0.2 files keep reading; an existing file keeps its
+// existing column shape on append (10 cols if it had `workstream_id`, 9 if
+// not) — only files *created* now get the v0.3 banner + header.
+const VERSION_COMMENT: &[u8] = b"# time-tracker v0.3\r\n";
+const HEADER: &[u8] = b"date,staff,client,engagement,narrative,minutes,hours_decimal,billable,entry_method,workstream_id\r\n";
 #[cfg_attr(not(test), allow(dead_code))]
 const HEADER_V01: &[u8] = b"timestamp_iso,staff,client,engagement,narrative,minutes,hours_decimal,billable,entry_method\r\n";
 const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
@@ -579,25 +583,18 @@ fn write_with_retry_no_queue(entry: &Entry) -> DrainOutcome {
 // ----- row formatting -----
 
 pub fn format_row(e: &Entry) -> Vec<u8> {
-    // C2: timestamp storage choice.
-    //
-    // `DateTime<Local>::to_rfc3339()` produces wall-clock-with-offset
-    // (e.g. `2026-05-09T11:30:45.123-07:00`) — NOT UTC.
-    //
-    // Pane's general invariant per `pane-time-zone-dst.md` is "store
-    // UTC, display local." This file is a documented exception: the
-    // CSV is consumed by Excel for billing review (SPEC §3.7), and
-    // local-with-offset round-trips cleanly while letting Excel show
-    // local time without a formula. The offset suffix means the
-    // record is still unambiguous across DST transitions and laptop
-    // travel — losing the offset is what would actually be wrong.
-    //
-    // Don't "fix" this to UTC unless the SPEC consumer changes.
-    // v0.2: 10 columns, trailing `workstream_id` (empty if unknown).
+    // v0.3: column 0 is the *date* the work landed on (the local calendar
+    // date of `e.timestamp`), formatted `YYYY-MM-DD`. We deliberately drop
+    // the wall-clock time: entries are date + duration. Excel reads
+    // `2026-05-09` as a date with no formula, and there's no DST/offset
+    // ambiguity to preserve once the clock time is gone. The monthly file an
+    // entry lands in is still chosen by `e.timestamp`'s month, so an entry
+    // logged near midnight stays on the day the timer (or the user) said.
+    // 10 columns, trailing `workstream_id` (empty if unknown).
     let hours_decimal = (e.minutes as f64) / 60.0;
     let row = format!(
         "{ts},{staff},{client},{engagement},{narrative},{minutes},{hours:.2},{billable},{method},{ws}\r\n",
-        ts = e.timestamp.to_rfc3339(),
+        ts = e.timestamp.format("%Y-%m-%d"),
         staff = csv_escape(&e.staff),
         client = csv_escape(&e.client),
         engagement = csv_escape(&e.engagement),
@@ -620,7 +617,7 @@ fn format_row_legacy(e: &Entry) -> Vec<u8> {
     let hours_decimal = (e.minutes as f64) / 60.0;
     let row = format!(
         "{ts},{staff},{client},{engagement},{narrative},{minutes},{hours:.2},{billable},{method}\r\n",
-        ts = e.timestamp.to_rfc3339(),
+        ts = e.timestamp.format("%Y-%m-%d"),
         staff = csv_escape(&e.staff),
         client = csv_escape(&e.client),
         engagement = csv_escape(&e.engagement),

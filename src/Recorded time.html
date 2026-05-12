@@ -20,7 +20,7 @@
     --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Mono",Menlo,Consolas,"Liberation Mono",monospace;
     --shadow-1: 0 1px 0 rgba(20,23,26,.03), 0 1px 2px rgba(20,23,26,.04);
     /* grid columns: lock · date · start · end · dur · client · eng · desc · bill · × */
-    --rt-cols: 36px 88px 78px 78px 72px 1.1fr 1fr 1.55fr 64px 28px;
+    --rt-cols: 36px 116px 88px 1.1fr 1fr 1.7fr 64px 28px;
 
     font-family: var(--sans);
     color: var(--ink); background: var(--paper);
@@ -314,6 +314,25 @@ function durMinutes(durStr) {
   const m = /^(\d+):(\d{2})$/.exec(String(durStr || '0:00'));
   return m ? parseInt(m[1],10)*60 + parseInt(m[2],10) : 0;
 }
+// Parse a duration the user typed: "1:30" / "1:5" (→1:05) / "90" (minutes) /
+// "1.5" or "1.5h" (hours). Returns whole minutes (clamped to 24h), or null.
+function parseDur(str) {
+  let s = String(str || '').trim().replace(/[hH]\s*$/, '').trim();
+  if (!s) return null;
+  let mins;
+  if (s.includes(':')) {
+    const [hs, ms] = s.split(':');
+    const h = parseInt(hs, 10), m = parseInt(ms, 10);
+    if (!Number.isFinite(h) || !Number.isFinite(m) || m < 0 || m > 59 || h < 0) return null;
+    mins = h * 60 + m;
+  } else if (/^\d+$/.test(s)) {
+    mins = parseInt(s, 10);
+  } else if (/^\d*\.?\d+$/.test(s)) {
+    mins = Math.round(parseFloat(s) * 60);
+  } else { return null; }
+  if (!Number.isFinite(mins) || mins < 0) return null;
+  return Math.min(mins, 24 * 60);
+}
 
 /* ---------- date-label helpers (for the scope captions) ---------- */
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -373,7 +392,7 @@ function isoToLabel(iso) {
 }
 // Map an /api/entries JSON object to the page's row shape.
 function ingest(e) {
-  return { id:e.id, dateISO:e.date, date:isoToLabel(e.date), start:e.start, end:e.end, dur:e.dur,
+  return { id:e.id, dateISO:e.date, date:isoToLabel(e.date), dur:e.dur, minutes:+e.minutes || durMinutes(e.dur),
            client:e.client, engagement:e.engagement, description:e.narrative || '',
            billable:!!e.billable, locked:!!e.locked, runId:e.run_id || null };
 }
@@ -491,7 +510,7 @@ function headerRow() {
       ${sortable && active ? `<svg width="9" height="9" viewBox="0 0 9 9" aria-hidden style="transform:${dir==='asc'?'rotate(180deg)':'none'}"><path d="M1.5 3 L4.5 6 L7.5 3" stroke="var(--ink-2)" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>` : ''}
     </div>`;
   return `<div class="rt-head">
-    <span></span>${hc('Date',false)}${hc('Start',true,true,'desc')}${hc('End',false)}${hc('Duration',true,false)}
+    <span></span>${hc('Date',true,true,'desc')}${hc('Duration',true,false)}
     ${hc('Client',true,false)}${hc('Engagement',false)}${hc('Notes',false)}
     <div style="text-align:center">${hc('Bill',false)}</div><span></span>
   </div>`;
@@ -502,7 +521,7 @@ function headerRow() {
    still visibly there to click — without it an empty Notes cell looks like a dead
    gap you can't get into. */
 function dcell(r, cell, content, cls, placeholder) {
-  const editable = !r.locked && cell && !['date'].includes(cell);
+  const editable = !r.locked && !!cell;
   const c = (cls || '') + (editable ? ' click' : '');
   const hasContent = content && String(content).trim().length > 0;
   const inner = hasContent ? content
@@ -522,10 +541,8 @@ function readRow(r) {
   return `
   <div class="rt-row" data-rowwrap="${r.id}">
     <span></span>
-    <div class="rt-cell mono dim">${esc(r.date)}</div>
-    ${dcell(r,'start',`<span>${esc(r.start)}</span>`,'mono')}
-    ${dcell(r,'end',`<span>${esc(r.end)}</span>`,'mono')}
-    <div class="rt-cell mono strong">${esc(r.dur)}</div>
+    ${dcell(r,'date',`<span>${esc(r.date)}</span>`,'mono dim')}
+    ${dcell(r,'dur',`<span>${esc(r.dur)}</span>`,'mono strong')}
     ${dcell(r,'client',esc(r.client),'strong')}
     ${dcell(r,'engagement',esc(r.engagement),'eng')}
     ${dcell(r,'description',esc(r.description),'dim2','Add notes…')}
@@ -538,8 +555,6 @@ function lockedRow(r) {
   <div class="rt-row locked rt-locked">
     <div class="rt-cellctr"><span class="rt-lockglyph" data-act="unlock-ask" data-row="${r.id}" title="Included in ${esc(r.runId || '')} — click to amend">${lockSvg(12)}</span></div>
     <div class="rt-cell mono dim">${esc(r.date)}</div>
-    <div class="rt-cell mono dim">${esc(r.start)}</div>
-    <div class="rt-cell mono dim">${esc(r.end)}</div>
     <div class="rt-cell mono dim2 strong">${esc(r.dur)}</div>
     <div class="rt-cell dim2 strong">${esc(r.client)}</div>
     <div class="rt-cell eng">${esc(r.engagement)}</div>
@@ -557,21 +572,22 @@ function editInput(value, cls, ph, multiline) {
 }
 function editingRow(r) {
   const cell = S.editing.cell;
-  const seg = (name, content, mono) => name === cell
-    ? editInput(r[name === 'engagement' ? 'engagement' : name] || '', mono ? 'time' : '')
-    : `<div class="rt-cell ${mono ? 'mono' : ''}${name==='engagement'?' eng':''}${name==='client'?' strong':''}${name==='description'?' dim2':''}">${esc(r[name])}</div>`;
   // client cell, when editing, gets the suggestion popup
   const clientCellHTML = cell === 'client'
     ? `<div class="rt-cellpop-wrap">${editInput(r.client || '', '', 'Client name')}${clientPopupHTML(r.client || '')}</div>`
     : `<div class="rt-cell strong">${esc(r.client)}</div>`;
+  const dateCellHTML = cell === 'date'
+    ? `<div class="rt-editcell focus time"><input type="date" value="${esc(r.dateISO || '')}" /></div>`
+    : `<div class="rt-cell mono dim">${esc(r.date)}</div>`;
+  const durCellHTML = cell === 'dur'
+    ? editInput(r.dur || '', 'time', '1:30')
+    : `<div class="rt-cell mono strong">${esc(r.dur)}</div>`;
   const tall = cell === 'description';
   return `
   <div class="rt-row editing${tall ? ' tall' : ''}">
     <span></span>
-    <div class="rt-cell mono dim">${esc(r.date)}</div>
-    ${cell === 'start' ? editInput(r.start, 'time') : `<div class="rt-cell mono">${esc(r.start)}</div>`}
-    ${cell === 'end'   ? editInput(r.end, 'time')   : `<div class="rt-cell mono">${esc(r.end)}</div>`}
-    <div class="rt-cell mono strong">${esc(r.dur)}</div>
+    ${dateCellHTML}
+    ${durCellHTML}
     ${clientCellHTML}
     ${cell === 'engagement' ? editInput(r.engagement || '', '', 'Engagement') : `<div class="rt-cell eng">${esc(r.engagement)}</div>`}
     ${cell === 'description' ? editInput(r.description || '', '', 'What did you work on?', true) : `<div class="rt-cell dim2">${esc(r.description)}</div>`}
@@ -588,15 +604,12 @@ function clientPopupHTML(typed) {
 }
 function newEntryRow() {
   const n = S.newRow;
-  const dur = durBetween(n.start, n.end) || '0:00';
   const clientHTML = `<div class="rt-cellpop-wrap"><div class="rt-editcell focus"><input id="rt-new-client" value="${esc(n.client)}" placeholder="Client name" data-newfield="client" /></div>${S.newClientOpen ? clientPopupHTML(n.client) : ''}</div>`;
   return `
   <div class="rt-row newrow tall">
     <div class="rt-cellctr"><span class="rt-mono" style="font-size:10.5px;color:var(--signal-ink);letter-spacing:.06em">+</span></div>
-    <div class="rt-cell mono dim">${esc(n.date)}</div>
-    <div class="rt-editcell time"><input value="${esc(n.start)}" data-newfield="start" /></div>
-    <div class="rt-editcell time"><input value="${esc(n.end)}" data-newfield="end" /></div>
-    <div class="rt-cell mono strong" id="rt-new-dur">${esc(dur)}</div>
+    <div class="rt-editcell time"><input type="date" value="${esc(n.dateISO)}" data-newfield="dateISO" /></div>
+    <div class="rt-editcell time"><input value="${esc(n.dur)}" placeholder="1:30" data-newfield="dur" /></div>
     ${clientHTML}
     <div class="rt-editcell ${n.engagement ? '' : 'ghost'}"><input value="${esc(n.engagement)}" placeholder="Engagement" data-newfield="engagement" /></div>
     <div class="rt-editcell multiline ${n.description ? '' : 'ghost'}"><textarea rows="3" placeholder="What did you work on?" data-newfield="description">${esc(n.description)}</textarea></div>
@@ -612,8 +625,6 @@ function deleteRow(r) {
   <div class="rt-row delrow">
     <span></span>
     <div class="rt-cell mono dim rt-strike">${esc(r.date)}</div>
-    <div class="rt-cell mono dim rt-strike">${esc(r.start)}</div>
-    <div class="rt-cell mono dim rt-strike">${esc(r.end)}</div>
     <div class="rt-cell mono dim rt-strike">${esc(r.dur)}</div>
     <div class="rt-delask">
       <span class="q">Delete this entry?</span>
@@ -772,11 +783,14 @@ function applyEdit(ctx, value, reload) {
   if (S.editing === ctx) S.editing = null;
   if (!r) { render(); return; }
   const v = String(value).trim();
-  const before = { start:r.start, end:r.end, dur:r.dur, client:r.client, engagement:r.engagement, description:r.description };
+  const before = { date:r.date, dateISO:r.dateISO, dur:r.dur, minutes:r.minutes, client:r.client, engagement:r.engagement, description:r.description };
   // optimistic local update
   let patch = {};
-  if (cell === 'start' || cell === 'end') {
-    if (v) { r[cell] = v; patch[cell] = v; const d = durBetween(r.start, r.end); if (d) r.dur = d; }
+  if (cell === 'date') {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v) && v !== r.dateISO) { r.dateISO = v; r.date = isoToLabel(v); patch.date = v; }
+  } else if (cell === 'dur') {
+    const mins = parseDur(v);
+    if (mins != null && mins > 0 && mins !== r.minutes) { r.minutes = mins; r.dur = fmtDur(mins); patch.dur = fmtDur(mins); }
   } else if (cell === 'engagement') {
     r.engagement = v.toUpperCase(); patch.engagement = r.engagement;
   } else if (cell === 'client') {
@@ -797,16 +811,6 @@ function cancelEdit() { if (S.editing) S.editing._done = true; S.editing = null;
 
 function openNewRow() {
   if (S.newRow) return;
-  // start = end-of-most-recent or 9:00 AM; end = +45m
-  let startMin = 9 * 60;
-  if (S.rows.length) {
-    const last = S.rows.reduce((a, b) => {
-      const am = parseTime(a.end), bm = parseTime(b.end);
-      return (bm != null && (am == null || bm > am)) ? b : a;
-    });
-    const m = parseTime(last.end); if (m != null) startMin = m;
-  }
-  const start = fmtClock(startMin), end = fmtClock(startMin + 45);
   // pick a sensible date: the most recent row's ISO date, else the range's
   // anchor day (today for today/this_week/all; yesterday/last-week end for those).
   const today = new Date();
@@ -814,7 +818,7 @@ function openNewRow() {
   const anchor = (S.rows[0] && S.rows[0].dateISO)
     ? S.rows[0].dateISO
     : (span ? toISO(span[1]) : toISO(today));
-  S.newRow = { dateISO:anchor, date:isoToLabel(anchor), start, end, dur:'0:45', client:'', engagement:'', description:'', billable:true, partial:false };
+  S.newRow = { dateISO:anchor, date:isoToLabel(anchor), dur:'1:00', client:'', engagement:'', description:'', billable:true, partial:false };
   S.newClientOpen = false;
   S.editing = null; S.delConfirm = null;
   render();
@@ -829,19 +833,19 @@ function readNewFields() {
     if (k === 'engagement') v = v.trim().toUpperCase();
     S.newRow[k] = v;
   });
-  const d = durBetween(S.newRow.start, S.newRow.end);
-  if (d) S.newRow.dur = d;
 }
 function saveNewRow() {
   readNewFields();
   const n = S.newRow;
   if (!n.client.trim() || !n.engagement.trim()) { n.partial = true; render(); return; }
+  const mins = parseDur(n.dur);
+  if (mins == null || mins <= 0) { showError('Enter a duration like “1:30” or “90”.'); return; }
   if (S.busy) return;
   S.busy = true; render();
   apiJson('/api/entries', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({
-      date:n.dateISO, start:n.start.trim(), end:n.end.trim(),
+      date:String(n.dateISO).trim(), dur:fmtDur(mins),
       client:n.client.trim(), engagement:n.engagement.trim().toUpperCase(),
       narrative:n.description, billable:!!n.billable,
     }),
@@ -992,7 +996,7 @@ function wire() {
         // hop to the next (or, with Shift, previous) fillable cell in this row,
         // committing what's in the current one on the way past.
         e.preventDefault();
-        const order = ['start', 'end', 'client', 'engagement', 'description'];
+        const order = ['date', 'dur', 'client', 'engagement', 'description'];
         const i = order.indexOf(editCtx.cell);
         const nextCell = e.shiftKey ? order[i - 1] : order[i + 1];
         const rowId = editCtx.rowId;
@@ -1039,13 +1043,13 @@ function wire() {
       const multiline = inp.tagName === 'TEXTAREA';   // the Notes field
       inp.addEventListener('keydown', (e) => {
         if (e.key === 'Tab') {
-          // walk the new-entry fields: start -> end -> client -> engagement -> Notes
+          // walk the new-entry fields: date -> duration -> client -> engagement -> Notes
           e.preventDefault();
           readNewFields();
-          const order = ['start', 'end', 'client', 'engagement', 'description'];
+          const order = ['dateISO', 'dur', 'client', 'engagement', 'description'];
           const i = order.indexOf(inp.dataset.newfield);
           const nextKey = e.shiftKey ? order[i - 1] : order[i + 1];
-          if (!nextKey) { if (!e.shiftKey) saveNewRow(); return; }   // tab past Notes saves; shift-tab past start stays
+          if (!nextKey) { if (!e.shiftKey) saveNewRow(); return; }   // tab past Notes saves; shift-tab past date stays
           if (nextKey === 'client') {
             // opening the client cell needs a re-render (the suggestion popup); keep focus on it
             S.newClientOpen = true; render();
@@ -1061,14 +1065,6 @@ function wire() {
         else if (e.key === 'Escape') { e.preventDefault(); discardNewRow(); }
         // plain Enter in Notes = newline
       });
-      if (inp.dataset.newfield === 'start' || inp.dataset.newfield === 'end') {
-        inp.addEventListener('input', () => {
-          const d = durBetween(
-            root.querySelector('[data-newfield="start"]').value,
-            root.querySelector('[data-newfield="end"]').value);
-          const out = root.querySelector('#rt-new-dur'); if (out && d) out.textContent = d;
-        });
-      }
       if (inp.dataset.newfield === 'client') {
         inp.addEventListener('focus', () => {
           if (!S.newClientOpen) {
