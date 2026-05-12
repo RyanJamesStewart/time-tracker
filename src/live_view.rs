@@ -48,6 +48,7 @@ pub const PORT: u16 = 17893;
 // These design pages are still mock data until their backends land.
 const RECORDED_PAGE: &str = include_str!("Recorded time.html");
 const EXPORT_PAGE: &str = include_str!("Export for billing.html");
+const ADMIN_PAGE: &str = include_str!("Admin.html");
 const POPOVER_PAGE: &str = include_str!("Tray popover.html");
 
 // Brand favicon — the same `db` mark used as the app icon. SVG is primary;
@@ -109,6 +110,7 @@ pub fn start(
                     .route("/", get(index))
                     .route("/recorded", get(recorded_index))
                     .route("/export", get(export_index))
+                    .route("/admin", get(admin_index))
                     .route("/popover", get(popover_index))
                     .route("/live", get(|| async { Redirect::permanent("/") }))
                     .route("/favicon.svg", get(favicon_svg))
@@ -129,6 +131,7 @@ pub fn start(
                         "/api/entries/:id",
                         axum::routing::patch(api_entries_patch).delete(api_entries_delete),
                     )
+                    .route("/api/entries/bulk-billable", post(api_entries_bulk_billable))
                     .route("/api/clients", get(api_clients_list).post(api_clients_create))
                     .route("/api/export", post(api_export_create))
                     .route("/api/exports", get(api_exports_list))
@@ -226,6 +229,10 @@ async fn recorded_index() -> impl IntoResponse {
 
 async fn export_index() -> impl IntoResponse {
     html_no_store(EXPORT_PAGE)
+}
+
+async fn admin_index() -> impl IntoResponse {
+    html_no_store(ADMIN_PAGE)
 }
 
 async fn popover_index() -> impl IntoResponse {
@@ -1460,6 +1467,125 @@ async fn api_entries_delete(
         }
         other => rewrite_err_response(other),
     }
+}
+
+// ---- POST /api/entries/bulk-billable ------------------------------------
+
+#[derive(serde::Deserialize)]
+struct BulkBillableBody {
+    /// Required. Only entries with exactly this client are touched.
+    client: String,
+    /// Optional. If given (and non-blank), narrows to this engagement under
+    /// the client; otherwise all of the client's engagements.
+    #[serde(default)]
+    engagement: Option<String>,
+    /// Target billable state to set on every matching un-exported entry.
+    billable: bool,
+    /// Optional date scope (same names as `/api/entries?range=`). Absent /
+    /// unknown -> all time.
+    #[serde(default)]
+    range: Option<String>,
+}
+
+/// Flip the `billable` flag on every un-exported entry matching
+/// (client [+ engagement] [+ range]). Exported (locked) rows are left alone —
+/// their billable is frozen by the export they're in. Rewrites each affected
+/// month's CSV exactly once. Response: `{ updated, skipped_locked }`.
+async fn api_entries_bulk_billable(
+    State(state): State<AppState>,
+    Json(body): Json<BulkBillableBody>,
+) -> impl IntoResponse {
+    let client = body.client.trim().to_string();
+    if client.is_empty() {
+        return err_json(StatusCode::UNPROCESSABLE_ENTITY, "client is required");
+    }
+    let eng = body
+        .engagement
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let want = body.billable;
+    let want_str = if want { "true" } else { "false" };
+    let range = body.range.as_deref().unwrap_or("all");
+    let today = Local::now().date_naive();
+    let window = range_window(range, today);
+    let locked = ExportManifest::load().locked_ids();
+
+    let mut updated = 0usize;
+    let mut skipped_locked = 0usize;
+
+    for stem in stems_for_window(window) {
+        let Some(file) = read_csv_file(&stem) else {
+            continue;
+        };
+        // 1-based indices of rows in this stem that should be flipped.
+        let mut to_flip: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        for (i, row) in file.rows.iter().enumerate() {
+            let n = i + 1;
+            if let Some((from, to)) = window {
+                let d = match chrono::DateTime::parse_from_rfc3339(
+                    row.first().map(String::as_str).unwrap_or(""),
+                ) {
+                    Ok(t) => t.with_timezone(&Local).date_naive(),
+                    Err(_) => continue,
+                };
+                if d < from || d > to {
+                    continue;
+                }
+            }
+            if row.get(2).map(String::as_str).unwrap_or("") != client {
+                continue;
+            }
+            if let Some(e) = &eng {
+                if row.get(3).map(String::as_str).unwrap_or("") != e.as_str() {
+                    continue;
+                }
+            }
+            // matched. locked? -> count + skip.
+            if locked.contains(&format!("{stem}:{n}")) {
+                skipped_locked += 1;
+                continue;
+            }
+            // already in the target state? -> no-op, no rewrite.
+            let cur = row.get(7).map(|s| s.eq_ignore_ascii_case("true")).unwrap_or(true);
+            if cur == want {
+                continue;
+            }
+            to_flip.insert(n);
+        }
+        if to_flip.is_empty() {
+            continue;
+        }
+        let count = to_flip.len();
+        let result = state.csv_writer.rewrite_blocking(
+            &stem,
+            Box::new(move |cur| {
+                let bytes = cur.ok_or_else(|| "no CSV file for that month".to_string())?;
+                let mut f = CsvFile::parse(&String::from_utf8_lossy(bytes));
+                let ncols = f.ncols();
+                for &n in &to_flip {
+                    if n == 0 || n > f.rows.len() {
+                        continue;
+                    }
+                    let r = &mut f.rows[n - 1];
+                    while r.len() < ncols {
+                        r.push(String::new());
+                    }
+                    r[7] = want_str.to_string();
+                }
+                Ok(f.render())
+            }),
+        );
+        match result {
+            RewriteResult::Written => updated += count,
+            other => return rewrite_err_response(other),
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "updated": updated, "skipped_locked": skipped_locked })),
+    )
 }
 
 // ---- GET /api/clients ; POST /api/clients -------------------------------

@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Time Tracker · Admin</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<style>
+  /* ---------- Time Tracker visual system v0.3 ---------- */
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; height:100%; background:#F2F3F1; }
+  .am-root {
+    --paper:#F2F3F1; --paper-2:#ECEEEC; --panel:#FFFFFF;
+    --ink:#14171A; --ink-2:#3C434B; --ink-3:#6A727C; --ink-4:#9097A0;
+    --rule:#E1E4E6; --rule-2:#D2D7DB; --rule-strong:#BFC5CA;
+    --signal:#1361FF; --signal-soft:#DCE8FF; --signal-ink:#0A3FA8;
+    --good:#1E8A52; --warn:#B45309; --bad:#C0392B;
+    --good-soft:#E1F1E8; --warn-soft:#F7E9D1; --bad-soft:#F5D9D4;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","SF Pro Text",system-ui,"Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --shadow-1: 0 1px 0 rgba(20,23,26,.04), 0 1px 2px rgba(20,23,26,.05);
+    --shadow-2: 0 1px 0 rgba(20,23,26,.04), 0 8px 24px -8px rgba(20,23,26,.10);
+    font-family:var(--sans); color:var(--ink); background:var(--paper);
+    font-size:13.5px; line-height:1.45; -webkit-font-smoothing:antialiased; font-feature-settings:"tnum";
+    background-image:
+      linear-gradient(to right, rgba(20,23,26,.035) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(20,23,26,.035) 1px, transparent 1px);
+    background-size:56px 56px; background-position:-1px -1px;
+    width:100%; min-height:100%; padding:24px 56px 96px; position:relative;
+  }
+  .am-root, .am-root * { box-sizing:border-box; }
+  body { background:var(--paper); }
+  .am-page { max-width:1100px; margin:0 auto; }
+  .am-mono { font-family:var(--mono); font-variant-numeric:tabular-nums; }
+
+  /* chrome (matches the other pages) */
+  .am-chrome { display:flex; align-items:center; gap:16px; padding:0 0 22px; }
+  .am-brand { display:flex; align-items:center; gap:12px; }
+  .am-mark { width:28px; height:28px; border-radius:7px; background:var(--ink); display:grid; place-items:center;
+             box-shadow: inset 0 0 0 1px rgba(255,255,255,.06), 0 1px 0 rgba(20,23,26,.2); }
+  .am-mark::before { content:""; width:8px; height:8px; background:var(--signal); border-radius:2px; box-shadow:0 0 0 2px var(--ink); }
+  .am-bname { display:flex; flex-direction:column; line-height:1.05; }
+  .am-bname b { font-weight:600; font-size:15px; letter-spacing:-.005em; }
+  .am-bname span { font-family:var(--mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); margin-top:2px; }
+  .am-tabs { display:flex; gap:4px; margin-left:18px; }
+  .am-tab { padding:8px 14px; font-size:13.5px; color:var(--ink-3); cursor:pointer; border-radius:7px; border:1px solid transparent;
+            user-select:none; font-weight:500; letter-spacing:-.005em; text-decoration:none; }
+  .am-tab:hover { color:var(--ink-2); }
+  .am-tab[data-on="1"] { font-weight:600; color:var(--ink); background:var(--panel); border-color:var(--rule); box-shadow:0 1px 0 rgba(20,23,26,.03); }
+  .am-spacer { flex:1; }
+  .am-conn { display:inline-flex; align-items:center; gap:9px; padding:6px 12px 6px 10px; border:1px solid var(--rule); background:var(--panel);
+             border-radius:999px; font-family:var(--mono); font-size:11.5px; color:var(--ink); box-shadow:var(--shadow-1); }
+  .am-conn .am-dot { width:8px; height:8px; border-radius:50%; background:var(--good); box-shadow:0 0 0 3px rgba(30,138,82,.16); }
+
+  .am-head { display:flex; align-items:flex-end; justify-content:space-between; padding:4px 0 22px; gap:24px; }
+  .am-head h1 { margin:0; font-size:26px; letter-spacing:-.018em; font-weight:600; }
+  .am-head .am-sub { color:var(--ink-3); font-size:13.5px; margin-top:6px; max-width:760px; }
+  .am-pillrow { display:inline-flex; gap:0; padding:3px; background:var(--paper-2); border-radius:8px; flex:0 0 auto; }
+  .am-pill { padding:7px 12px; font-size:12.5px; color:var(--ink-2); cursor:pointer; border-radius:6px; user-select:none; white-space:nowrap; }
+  .am-pill[data-on="1"] { background:var(--panel); color:var(--ink); box-shadow:var(--shadow-1); font-weight:500; }
+
+  /* tree */
+  .am-sec { background:var(--panel); border:1px solid var(--rule); border-radius:10px; box-shadow:var(--shadow-1); overflow:hidden; }
+  .am-row { display:flex; align-items:center; gap:12px; padding:10px 16px; border-top:1px solid var(--rule); }
+  .am-sec > .am-row:first-child { border-top:0; }
+  .am-row.am-client { background:linear-gradient(180deg,#FCFDFD,#F7F8F7); cursor:pointer; }
+  .am-row.am-client:hover { background:var(--paper-2); }
+  .am-row.am-eng { padding-left:42px; cursor:pointer; }
+  .am-row.am-eng:hover { background:var(--paper-2); }
+  .am-row.am-entry { padding-left:72px; font-size:12.5px; color:var(--ink-2); border-top:1px solid var(--rule); }
+  .am-row.am-entry.am-locked { color:var(--ink-4); background:repeating-linear-gradient(45deg,rgba(20,23,26,.025),rgba(20,23,26,.025) 6px,transparent 6px,transparent 12px); }
+  .am-twirl { width:14px; flex:0 0 auto; color:var(--ink-4); font-size:9px; font-family:var(--mono); user-select:none; transition:transform .12s ease; display:inline-block; text-align:center; }
+  .am-twirl.open { transform:rotate(90deg); }
+  .am-nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .am-nm b { font-weight:600; color:var(--ink); }
+  .am-meta { font-family:var(--mono); font-size:11px; color:var(--ink-3); white-space:nowrap; flex:0 0 auto; }
+  .am-meta .b { color:var(--good); } .am-meta .n { color:var(--warn); }
+  .am-narr { color:var(--ink-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .am-acts { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+  .am-btn { font:inherit; font-size:11.5px; border:1px solid var(--rule-2); background:var(--panel); border-radius:6px; padding:3px 9px;
+            color:var(--ink-2); cursor:pointer; white-space:nowrap; }
+  .am-btn:hover { border-color:var(--rule-strong); color:var(--ink); }
+  .am-btn.b:hover { border-color:rgba(19,97,255,.5); color:var(--signal-ink); background:var(--signal-soft); }
+  .am-btn.n:hover { border-color:rgba(180,83,9,.5); color:var(--warn); background:var(--warn-soft); }
+  .am-btn[disabled] { opacity:.5; cursor:not-allowed; }
+  .am-sw { display:inline-flex; align-items:center; gap:7px; cursor:pointer; user-select:none; font-family:var(--mono); font-size:11px; flex:0 0 auto; }
+  .am-sw .t { width:28px; height:16px; border-radius:999px; background:var(--rule-2); position:relative; transition:background .12s ease; flex:0 0 auto; }
+  .am-sw .t::after { content:""; position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(20,23,26,.2); transition:left .12s ease; }
+  .am-sw.on .t { background:var(--signal); } .am-sw.on .t::after { left:14px; }
+  .am-sw .lab { color:var(--ink-3); } .am-sw.on .lab { color:var(--signal-ink); }
+  .am-lock { font-size:11px; color:var(--ink-4); font-family:var(--mono); flex:0 0 auto; }
+
+  .am-empty { padding:56px 24px; text-align:center; color:var(--ink-3); }
+  .am-empty .bigtt { font-family:var(--mono); font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-4); margin-bottom:10px; }
+  .am-empty h3 { margin:0 0 6px; font-size:18px; font-weight:600; color:var(--ink); }
+  .am-empty p { margin:0 auto; max-width:460px; }
+  .am-toast-host { position:fixed; left:50%; transform:translateX(-50%); bottom:18px; z-index:200; }
+  .am-toast { padding:9px 14px; border-radius:8px; background:var(--ink); color:#fff; font-size:13px; box-shadow:var(--shadow-2); }
+  .am-toast.good { background:var(--good); } .am-toast.bad { background:var(--bad); }
+  @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.001s !important; transition-duration:.001s !important; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+/* =====================================================================
+ * Time Tracker · Admin — billable management.
+ *
+ * Wired to the real data layer: GET /api/entries?range=... for the tree,
+ * POST /api/entries/bulk-billable to flip a whole client / engagement at
+ * once, PATCH /api/entries/:id to flip one entry. Exported (locked) entries
+ * are read-only here — their billable is frozen by the export they're in.
+ * ===================================================================== */
+(() => {
+'use strict';
+const $root = () => document.getElementById('root');
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+const RANGES = { all:'All time', this_month:'This month', last_month:'Last month', this_week:'This week' };
+
+const S = {
+  range: 'all',
+  loading: true,
+  loadError: null,
+  entries: [],            // /api/entries rows
+  openClients: new Set(), // expanded client names
+  openEngs: new Set(),    // expanded "client∷engagement" keys
+  busy: false,            // a bulk op in flight
+};
+const ekey = (c, e) => c + '∷' + e;
+function durMin(e) { const m = /^(\d+):(\d{2})$/.exec(String(e.dur || '0:00')); return m ? (+m[1]*60 + +m[2]) : 0; }
+function fmtH(min) { min = Math.max(0, Math.round(min)); const h = Math.floor(min/60), m = min%60; return h + 'h' + (m ? (' ' + m + 'm') : ''); }
+
+async function apiJson(url, opts) {
+  const r = await fetch(url, opts);
+  let d = null; try { d = await r.json(); } catch {}
+  if (!r.ok) { const e = new Error((d && d.error) || ('server returned ' + r.status)); e.status = r.status; throw e; }
+  return d;
+}
+async function load() {
+  S.loading = true; S.loadError = null; render();
+  try { const d = await apiJson('/api/entries?range=' + encodeURIComponent(S.range)); S.entries = Array.isArray(d) ? d : []; }
+  catch (err) { S.entries = []; S.loadError = err.message || 'could not reach the app'; }
+  S.loading = false; render();
+}
+
+/* entries → [{ client, entries:[all], engs:[{ engagement, entries:[] }] }] */
+function tree() {
+  const byC = new Map();
+  for (const e of S.entries) {
+    const c = e.client || '—';
+    if (!byC.has(c)) byC.set(c, new Map());
+    const byE = byC.get(c);
+    const en = e.engagement || '';
+    if (!byE.has(en)) byE.set(en, []);
+    byE.get(en).push(e);
+  }
+  return [...byC.entries()].map(([c, byE]) => {
+    const engs = [...byE.entries()]
+      .map(([en, ents]) => ({ engagement: en, entries: ents.slice().sort((a, b) => String(b.date||'').localeCompare(String(a.date||''))) }))
+      .sort((a, b) => a.engagement.toLowerCase().localeCompare(b.engagement.toLowerCase()));
+    return { client: c, engs, entries: engs.flatMap(g => g.entries) };
+  }).sort((a, b) => a.client.toLowerCase().localeCompare(b.client.toLowerCase()));
+}
+function stats(ents) {
+  let min = 0, bN = 0, nN = 0, locked = 0;
+  for (const e of ents) { min += durMin(e); if (e.billable) bN++; else nN++; if (e.locked) locked++; }
+  return { n: ents.length, min, bN, nN, locked };
+}
+
+/* ---- bulk flip ---- */
+async function bulk(client, engagement, billable) {
+  if (S.busy) return;
+  const scope = engagement != null ? `${client} · ${engagement || '(no engagement)'}` : client;
+  const matched = S.entries.filter(e => e.client === client && (engagement == null || e.engagement === engagement));
+  const changeable = matched.filter(e => !e.locked && !!e.billable !== billable);
+  const lockedN = matched.filter(e => e.locked).length;
+  if (changeable.length === 0) {
+    toast(lockedN ? 'Those entries are locked in an export — nothing to change.' : `Already all ${billable ? 'billable' : 'non-billable'} — nothing to change.`, '');
+    return;
+  }
+  const ok = window.confirm(
+    `Mark ${changeable.length} un-exported entr${changeable.length === 1 ? 'y' : 'ies'} for ${scope} as ${billable ? 'billable' : 'non-billable'}?`
+    + (lockedN ? `\n\n(${lockedN} entr${lockedN === 1 ? 'y is' : 'ies are'} locked in an export and will be left as-is.)` : '')
+    + `\n\nThis edits the recorded CSV directly.`);
+  if (!ok) return;
+  S.busy = true; render();
+  try {
+    const r = await apiJson('/api/entries/bulk-billable', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client, engagement: engagement, billable, range: S.range }),
+    });
+    toast(`Updated ${r.updated} entr${r.updated === 1 ? 'y' : 'ies'}${r.skipped_locked ? ` · ${r.skipped_locked} locked left as-is` : ''}.`, 'good');
+  } catch (err) { toast('Bulk update failed: ' + (err.message || 'something went wrong'), 'bad'); }
+  S.busy = false; await load();
+}
+
+/* ---- single-entry flip ---- */
+async function toggleEntry(e) {
+  if (S.busy) return;
+  if (e.locked) { toast('That entry is locked in an export — unlock it on the Recorded Time page first.', ''); return; }
+  const next = !e.billable;
+  e.billable = next; render();    // optimistic
+  try { await apiJson('/api/entries/' + encodeURIComponent(e.id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ billable: next }) }); }
+  catch (err) { e.billable = !next; toast('Could not update that entry: ' + (err.message || '?'), 'bad'); render(); }
+}
+
+let toastT = null;
+function toast(msg, kind) {
+  let host = $root().querySelector('.am-toast-host');
+  if (!host) { host = document.createElement('div'); host.className = 'am-toast-host'; $root().appendChild(host); }
+  host.innerHTML = `<div class="am-toast ${kind || ''}">${esc(msg)}</div>`;
+  if (toastT) clearTimeout(toastT);
+  toastT = setTimeout(() => { host.innerHTML = ''; }, 4500);
+}
+
+/* ---- render ---- */
+function chrome() {
+  const tab = (k, l, h) => `<a class="am-tab" data-on="${k === 'admin' ? '1' : '0'}" href="${h}">${l}</a>`;
+  return `<header class="am-chrome">
+    <div class="am-brand"><div class="am-mark" aria-hidden="true"></div><div class="am-bname"><b>Time&nbsp;Tracker</b><span>v0.3</span></div></div>
+    <nav class="am-tabs" role="tablist">${tab('recorded','Recorded Time','/')}${tab('export','Export','/export')}${tab('history','Exports history','/export?view=history')}${tab('admin','Admin','/admin')}</nav>
+    <div class="am-spacer"></div>
+    <div class="am-conn"><span class="am-dot"></span><span>connected · local</span></div>
+  </header>`;
+}
+function pills() {
+  return `<div class="am-pillrow">${Object.entries(RANGES).map(([k, l]) => `<div class="am-pill" data-on="${S.range === k ? '1' : '0'}" data-act="range" data-v="${k}">${esc(l)}</div>`).join('')}</div>`;
+}
+function bulkBtns(client, engagement) {
+  const d = S.busy ? ' disabled' : '';
+  const eAttr = engagement != null ? ` data-e="${esc(engagement)}"` : '';
+  return `<button class="am-btn b" data-act="bulk-bill" data-c="${esc(client)}"${eAttr}${d}>→ all billable</button>`
+       + `<button class="am-btn n" data-act="bulk-nonbill" data-c="${esc(client)}"${eAttr}${d}>→ all non-billable</button>`;
+}
+function metaSpan(st) {
+  return `<span class="am-meta">${st.n} entr${st.n === 1 ? 'y' : 'ies'} · ${fmtH(st.min)}${st.locked ? ` · ${st.locked} locked` : ''} · <span class="b">${st.bN} bill</span> / <span class="n">${st.nN} non</span></span>`;
+}
+function gridHTML() {
+  const t = tree();
+  if (t.length === 0) {
+    return `<div class="am-sec"><div class="am-empty"><div class="bigtt">no entries</div><h3>Nothing recorded${S.range !== 'all' ? ' in this range' : ''} yet.</h3><p>Log some time, then come back here to manage what's billable.</p></div></div>`;
+  }
+  let rows = '';
+  for (const c of t) {
+    const cOpen = S.openClients.has(c.client);
+    rows += `<div class="am-row am-client" data-act="toggle-client" data-c="${esc(c.client)}">
+      <span class="am-twirl${cOpen ? ' open' : ''}">▶</span>
+      <span class="am-nm"><b>${esc(c.client)}</b></span>${metaSpan(stats(c.entries))}
+      <span class="am-acts">${bulkBtns(c.client, null)}</span>
+    </div>`;
+    if (!cOpen) continue;
+    for (const g of c.engs) {
+      const gOpen = S.openEngs.has(ekey(c.client, g.engagement));
+      rows += `<div class="am-row am-eng" data-act="toggle-eng" data-c="${esc(c.client)}" data-e="${esc(g.engagement)}">
+        <span class="am-twirl${gOpen ? ' open' : ''}">▶</span>
+        <span class="am-nm">${g.engagement ? esc(g.engagement) : '<span style="color:var(--ink-4)">(no engagement)</span>'}</span>${metaSpan(stats(g.entries))}
+        <span class="am-acts">${bulkBtns(c.client, g.engagement)}</span>
+      </div>`;
+      if (!gOpen) continue;
+      for (const e of g.entries) {
+        const lk = !!e.locked;
+        rows += `<div class="am-row am-entry${lk ? ' am-locked' : ''}">
+          <span class="am-twirl"></span>
+          <span class="am-mono" style="flex:0 0 92px;color:var(--ink-3)">${esc(e.date || '')}</span>
+          <span class="am-mono" style="flex:0 0 54px;text-align:right">${esc(e.dur || '0:00')}</span>
+          <span class="am-narr" style="flex:1">${esc(e.narrative || '—')}</span>
+          ${lk
+            ? `<span class="am-lock" title="included in export ${esc(e.run_id || '')}">🔒 in ${esc(e.run_id || 'an export')}</span>`
+            : `<span class="am-sw${e.billable ? ' on' : ''}" data-act="toggle-entry" data-id="${esc(e.id)}" title="click to flip"><span class="t"></span><span class="lab">${e.billable ? 'billable' : 'non-billable'}</span></span>`}
+        </div>`;
+      }
+    }
+  }
+  return `<div class="am-sec">${rows}</div>`;
+}
+function render() {
+  let body;
+  if (S.loadError) {
+    body = `<div class="am-sec"><div class="am-empty"><div class="bigtt" style="color:var(--bad)">offline</div><h3>Couldn't reach Time Tracker.</h3><p>${esc(S.loadError)} — make sure the app is running. <button class="am-btn" data-act="reload">Retry</button></p></div></div>`;
+  } else if (S.loading && S.entries.length === 0) {
+    body = `<div class="am-sec"><div class="am-empty"><div class="bigtt">loading</div></div></div>`;
+  } else {
+    body = gridHTML();
+  }
+  $root().innerHTML = `<div class="am-root"><div class="am-page">
+    ${chrome()}
+    <div class="am-head">
+      <div><h1>Admin · billable</h1><div class="am-sub">Manage what's billable, client by client. Use the buttons on a client or engagement row to flip everything under it at once — exported (locked) entries are left alone — or open an engagement and toggle individual entries. Changes here rewrite the recorded CSV directly.</div></div>
+      ${pills()}
+    </div>
+    ${body}
+  </div></div>`;
+  wire();
+}
+function wire() {
+  $root().querySelectorAll('[data-act]').forEach(el => {
+    el.addEventListener('click', ev => {
+      const a = el.dataset.act;
+      if (el.tagName === 'A') return;
+      ev.preventDefault(); ev.stopPropagation();
+      switch (a) {
+        case 'range': if (S.range !== el.dataset.v) { S.range = el.dataset.v; load(); } break;
+        case 'reload': load(); break;
+        case 'toggle-client': { const c = el.dataset.c; if (S.openClients.has(c)) S.openClients.delete(c); else S.openClients.add(c); render(); break; }
+        case 'toggle-eng': { const k = ekey(el.dataset.c, el.dataset.e); if (S.openEngs.has(k)) S.openEngs.delete(k); else S.openEngs.add(k); render(); break; }
+        case 'bulk-bill': bulk(el.dataset.c, ('e' in el.dataset) ? el.dataset.e : null, true); break;
+        case 'bulk-nonbill': bulk(el.dataset.c, ('e' in el.dataset) ? el.dataset.e : null, false); break;
+        case 'toggle-entry': { const e = S.entries.find(x => x.id === el.dataset.id); if (e) toggleEntry(e); break; }
+      }
+    });
+  });
+}
+render();
+load();
+window.addEventListener('focus', () => { if (!S.busy) load(); });
+})();
+</script>
+</body>
+</html>

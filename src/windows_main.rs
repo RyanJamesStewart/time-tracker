@@ -436,7 +436,17 @@ pub fn run() {
     let quick_entry_menu = MenuItem::new("Quick entry  (Ctrl+Shift+H)", true, None);
     #[cfg(feature = "live-view")]
     let live_view_menu = MenuItem::new("Open popover  (Ctrl+Shift+/)", true, None);
+    // v0.3: in the shipping build "Quit" no longer kills the app — it just
+    // dismisses the popover; the app stays in the tray (hotkeys live) and
+    // auto-starts on login (MSIX StartupTask), so Ctrl+Shift+/ always has
+    // something to talk to. "Exit Time Tracker" is the real exit. (The
+    // no-feature fallback build has no popover, so "Quit" still exits there.)
+    #[cfg(feature = "live-view")]
+    let quit_menu = MenuItem::new("Hide  (Time Tracker keeps running in the tray)", true, None);
+    #[cfg(not(feature = "live-view"))]
     let quit_menu = MenuItem::new("Quit", true, None);
+    #[cfg(feature = "live-view")]
+    let exit_menu = MenuItem::new("Exit Time Tracker", true, None);
     menu.append(&header).unwrap();
     menu.append(&PredefinedMenuItem::separator()).unwrap();
     #[cfg(feature = "live-view")]
@@ -451,6 +461,8 @@ pub fn run() {
         menu.append(&PredefinedMenuItem::separator()).unwrap();
     }
     menu.append(&quit_menu).unwrap();
+    #[cfg(feature = "live-view")]
+    menu.append(&exit_menu).unwrap();
 
     let menu_ids = MenuIds {
         #[cfg(feature = "live-view")]
@@ -461,6 +473,8 @@ pub fn run() {
         #[cfg(feature = "live-view")]
         live_view: live_view_menu.id().clone(),
         quit: quit_menu.id().clone(),
+        #[cfg(feature = "live-view")]
+        exit: exit_menu.id().clone(),
     };
 
     let _tray: TrayIcon = TrayIconBuilder::new()
@@ -661,10 +675,27 @@ pub fn run() {
                 }
                 continue;
             }
-            if menu_evt.id == menu_ids.quit {
-                tracing::info!("Quit selected from tray menu. Exiting.");
-                eprintln!("[menu] Quit selected. Exiting.");
+            #[cfg(feature = "live-view")]
+            if menu_evt.id == menu_ids.exit {
+                tracing::info!("Exit Time Tracker selected from tray menu. Exiting.");
+                eprintln!("[menu] Exit selected. Exiting.");
                 elwt.exit();
+                continue;
+            }
+            if menu_evt.id == menu_ids.quit {
+                #[cfg(feature = "live-view")]
+                {
+                    // "Hide" — dismiss the popover, keep the app alive in the tray.
+                    if let Some(pw) = popover_window.as_mut() {
+                        pw.hide();
+                    }
+                }
+                #[cfg(not(feature = "live-view"))]
+                {
+                    tracing::info!("Quit selected from tray menu. Exiting.");
+                    eprintln!("[menu] Quit selected. Exiting.");
+                    elwt.exit();
+                }
             } else if menu_evt.id == menu_ids.quick_entry {
                 popup.show(PopupMode::QuickEntry, "menu");
             } else if menu_evt.id == menu_ids.timer_start {
@@ -725,6 +756,8 @@ struct MenuIds {
     #[cfg(feature = "live-view")]
     live_view: MenuId,
     quit: MenuId,
+    #[cfg(feature = "live-view")]
+    exit: MenuId,
 }
 
 /// Build a `HotKey` from a `config::HotkeyCombo` (parsed from `[hotkeys]`),
