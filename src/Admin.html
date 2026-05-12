@@ -201,6 +201,19 @@ async function bulk(client, engagement, billable) {
   S.busy = false; await load();
 }
 
+/* ---- dedupe: drop exact-duplicate rows, keep the latest created ---- */
+async function dedupe() {
+  if (S.busy) return;
+  if (!window.confirm('Scan every month and remove entries that are exact duplicates (same date, client, engagement, notes, duration and billable flag)?\n\nThe most recently-created copy of each is kept; the rest are deleted from the CSV. Entries locked in an export are left alone.')) return;
+  S.busy = true; render();
+  try {
+    const r = await apiJson('/api/entries/dedupe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const n = r && r.removed || 0;
+    toast(n === 0 ? 'No duplicate entries found.' : `Removed ${n} duplicate entr${n === 1 ? 'y' : 'ies'}${r.files_touched > 1 ? ` across ${r.files_touched} months` : ''}.`, n ? 'good' : '');
+  } catch (err) { toast('Dedupe failed: ' + (err.message || 'something went wrong'), 'bad'); }
+  S.busy = false; await load();
+}
+
 /* ---- single-entry flip ---- */
 async function toggleEntry(e) {
   if (S.busy) return;
@@ -307,7 +320,7 @@ function render() {
     ${chrome()}
     <div class="am-head">
       <div><h1>Admin · billable</h1><div class="am-sub">Manage what's billable, client by client. Use the buttons on a client or engagement row to flip everything under it at once — exported (locked) entries are left alone — or open an engagement and toggle individual entries. Changes here rewrite the recorded CSV directly.</div></div>
-      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:10px;flex:0 0 auto">${pills()}${lockToggle()}</div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:10px;flex:0 0 auto">${pills()}${lockToggle()}<button class="am-btn" data-act="dedupe"${S.busy ? ' disabled' : ''} title="scan every month and remove rows that are exact duplicates, keeping the most recent copy">⧉ Remove duplicate entries</button></div>
     </div>
     ${body}
   </div></div>`;
@@ -328,6 +341,7 @@ function wire() {
         case 'bulk-bill': bulk(el.dataset.c, ('e' in el.dataset) ? el.dataset.e : null, true); break;
         case 'bulk-nonbill': bulk(el.dataset.c, ('e' in el.dataset) ? el.dataset.e : null, false); break;
         case 'toggle-entry': { const e = S.entries.find(x => x.id === el.dataset.id); if (e) toggleEntry(e); break; }
+        case 'dedupe': dedupe(); break;
       }
     });
   });
