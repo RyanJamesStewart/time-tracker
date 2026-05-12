@@ -234,8 +234,8 @@ fn default_config_body(staff: &str, billable: bool) -> String {
          # warning box on launch listing any that failed to register).\n\
          # [hotkeys]\n\
          # quick_entry    = \"Ctrl+Shift+H\"   # opens the popover's add-workstream form\n\
-         # timer_start    = \"Ctrl+Shift+;\"   # v0.3: this slot now STOPS the timer (same as timer_stop) — starting happens via the popover\n\
-         # timer_stop     = \"Ctrl+Shift+'\"   # stop the running timer and write the entry (no popup)\n\
+         # timer_start    = \"Ctrl+Shift+;\"   # stops the running timer and writes the entry (no popup) — starting happens via the popover\n\
+         # timer_stop     = \"Ctrl+Shift+'\"   # opens the popover's workstream filter (type to filter, ↓ to pick) — was: stop timer\n\
          # popover_toggle = \"Ctrl+Shift+/\"   # show / hide the popover\n\
          \n\
          # [startup] — set enabled = false to stop the app arming autostart for\n\

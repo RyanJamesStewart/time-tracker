@@ -86,6 +86,15 @@
   .pv-switch-head { display:flex; align-items:baseline; padding:10px 14px 6px; }
   .pv-switch-head .sp { flex:1; }
   .pv-switch-head .keys { font-size:10.5px; color:var(--ink-4); font-family:var(--mono); letter-spacing:.04em; display:inline-flex; align-items:center; gap:4px; }
+  .pv-switch-head .keys.act { cursor:pointer; }
+  .pv-switch-head .keys.act:hover { color:var(--ink-3); }
+  /* find/filter box (Ctrl+Shift+') — replaces the header label while active */
+  .pv-find { display:flex; align-items:center; gap:8px; padding:9px 12px 8px; border-bottom:1px solid var(--rule); }
+  .pv-find svg { flex:0 0 auto; color:var(--ink-4); }
+  .pv-find input { flex:1; min-width:0; border:0; outline:0; background:transparent; font:inherit; font-size:13.5px; color:var(--ink); padding:1px 0; }
+  .pv-find input::placeholder { color:var(--ink-4); }
+  .pv-find .hint { font-size:10px; color:var(--ink-4); font-family:var(--mono); letter-spacing:.04em; display:inline-flex; align-items:center; gap:4px; white-space:nowrap; flex:0 0 auto; }
+  .pv-find-empty { padding:18px 14px; font-size:12.5px; color:var(--ink-3); display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
   /* cap the switcher so a big registry can't push the card past the popover
      window — the rest scrolls; "View all in Recorded Time" is the overflow valve */
   .pv-rows { max-height:240px; overflow-y:auto; overscroll-behavior:contain; }
@@ -292,20 +301,22 @@
  * exists it's served at /popover for review (and stays in sync with the
  * real app over the same /ws channel the dashboard used).
  *
- * Interactive: Tab / Shift+Tab cycles the switcher, Enter switches the
+ * Interactive: Tab / Shift+Tab cycles the switcher, Enter starts/switches the
  * running timer to the selection (1s auto-dismiss countdown), Ctrl+Shift+H
  * opens the add-workstream form (client type-ahead → engagement → billable
- * → "Add and start timer" / "Add only" / Cancel), Ctrl+Shift+; starts /
- * Ctrl+Shift+' stops the timer, Esc backs out. WS events (timer_started /
- * timer_stopped / entry_logged / hotkey / workstream_added) keep it synced
- * if the desktop hotkeys fire.
+ * → "Add and start timer" / "Add only" / Cancel), Ctrl+Shift+' opens the
+ * workstream filter (live substring search; ↓ moves into the list, ↵ switches,
+ * Esc closes), Ctrl+Shift+; stops the timer, Esc backs out. WS events
+ * (timer_started / timer_stopped / entry_logged / hotkey / workstream_added)
+ * keep it synced if the desktop hotkeys fire.
  *
  * Server-wired: GET /workstreams seeds the switcher; POST /workstreams adds
  * one (the add-form submit). Falls back to seed data if those routes 404
- * (older server / pure-prototype). ?add=1 opens the add form on load — that
- * is how the desktop Ctrl+Shift+H launches the popover from a closed state.
- * URL knobs: ?state=first-run | no-active for the empty panels, ?ref for
- * the hotkey reference card, ?tab=today to open straight on the Today tab.
+ * (older server / pure-prototype). ?add=1 opens the add form on load (how the
+ * desktop Ctrl+Shift+H summons the popover from closed); ?find=1 opens the
+ * filter the same way (Ctrl+Shift+'). URL knobs: ?state=first-run | no-active
+ * for the empty panels, ?ref for the hotkey reference card, ?tab=today to
+ * open straight on the Today tab.
  *
  * Today data: seeded from a mock day log; GET /today (JSON) replaces it
  * when the server exposes it (falls back to the seed if that route 404s —
@@ -366,7 +377,9 @@ const S = {
   addClient: '', addEngagement: '', addBillable: true,
   addSel: 0,                  // highlighted row in the client/engagement suggestion dropdown (↓/↑ move it, Enter picks it)
   addBusy: false,             // POST /workstreams in flight
-  openedFromClosed: false,    // popover was opened by Ctrl+Shift+H from a closed state → Esc closes it
+  finding: false,             // workstream filter active (Ctrl+Shift+' / the desktop hotkey) — a search box over the switcher
+  query: '',                  // the filter text
+  openedFromClosed: false,    // popover was opened by Ctrl+Shift+H/' from a closed state → Esc closes it
   switchToast: null,          // { secs, timer, fromEng }
   connected: false,
   haveServer: false,          // GET /workstreams succeeded → POST is live
@@ -526,11 +539,22 @@ function idleHeader() {
   return `<div class="pv-head">
     <div class="pv-head-tag"><span class="pv-dot-idle" aria-hidden="true"></span><span class="pv-lbl">idle · no timer running</span></div>
     <span class="pv-timer idle pv-mono">—:—:—</span>
-    <div class="pv-idle-hint"><span>Select a workstream and press</span>${combo(['Ctrl','Shift',';'])}<span>to start.</span></div>
+    <div class="pv-idle-hint"><span>Select a workstream and press</span>${combo(['↵'])}<span>to start.</span></div>
   </div>`;
 }
 
 function pinSvg() { return `<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden><path d="M5 1 V3 L7 5 H3 L5 3 M5 5 V9" stroke="var(--ink-4)" stroke-width="1" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`; }
+function searchSvg() { return `<svg width="13" height="13" viewBox="0 0 13 13" aria-hidden><circle cx="5.5" cy="5.5" r="3.6" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M8.4 8.4 L11.5 11.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>`; }
+
+/* find-mode: which workstreams match the typed filter (substring on client OR
+   engagement, case-insensitive). matchIdxs() returns *original* S.list indices
+   so selection / running / switchTo all keep working unchanged. */
+function matchesQuery(w) {
+  const q = S.query.trim().toLowerCase();
+  if (!q) return true;
+  return (w.client || '').toLowerCase().includes(q) || (w.engagement || '').toLowerCase().includes(q);
+}
+function matchIdxs() { return S.list.map((_, i) => i).filter(i => matchesQuery(S.list[i])); }
 
 function switcherRow(w, i) {
   const running = S.base === 'running' && i === S.runningIdx;
@@ -547,11 +571,22 @@ function switcherRow(w, i) {
   </div>`;
 }
 function switcher() {
+  if (S.finding) {
+    const idxs = matchIdxs();
+    const rows = idxs.map(i => switcherRow(S.list[i], i)).join('');
+    const body = rows
+      ? `<div class="pv-rows">${rows}</div>`
+      : `<div class="pv-rows"><div class="pv-find-empty">No workstreams match “${esc(S.query.trim())}”. ${combo(['Ctrl','Shift','H'])} to add it.</div></div>`;
+    return `<div class="pv-switch">
+      <div class="pv-find">${searchSvg()}<input id="pv-find" value="${esc(S.query)}" placeholder="Filter clients & engagements…" autocomplete="off" spellcheck="false" />
+        <span class="hint">${combo(['↓'],true)} pick<span>·</span>${combo(['↵'],true)} switch<span>·</span>${combo(['Esc'],true)} done</span></div>
+      ${body}
+    </div>`;
+  }
   const rows = S.list.map(switcherRow).join('');
   return `<div class="pv-switch">
-    <div class="pv-switch-head"><span class="pv-lbl">workstreams</span><span class="sp"></span><span class="keys">${combo(['Tab'],true)}<span>·</span>${combo(['↵'],true)}</span></div>
+    <div class="pv-switch-head"><span class="pv-lbl">workstreams</span><span class="sp"></span><span class="keys act" data-act="find-open" title="filter (Ctrl+Shift+')">${searchSvg()}<span>·</span>${combo(["'"],true)}<span>·</span>${combo(['↵'],true)}</span></div>
     <div class="pv-rows">${rows}</div>
-    <div class="pv-switch-foot"><button class="pv-link" data-act="open-recorded">View all in Recorded Time ↗</button></div>
   </div>`;
 }
 
@@ -627,7 +662,7 @@ function todayRow(e) {
 }
 function todayEmpty() {
   return `<div class="pv-today-empty"><div class="h">Nothing logged yet today.</div>
-    <div class="p">Press ${combo(['Ctrl','Shift',';'])} to start the active timer.</div></div>`;
+    <div class="p">Switch to ${combo(['←'])} Workstreams, pick one, and press ${combo(['↵'])} to start the timer.</div></div>`;
 }
 function todayPanel() {
   const entries = [...S.today.entries].sort((a, b) => a.startMin - b.startMin);
@@ -732,19 +767,19 @@ function emptyHistorical() {
 /* ---------- hotkey reference card (?ref) ---------- */
 function refCard() {
   const rows = [
-    { k:['Ctrl','Shift','/'], v:'open / close popover', s:'glance, switch, dismiss · global' },
-    { k:['Ctrl','Shift',';'], v:'start the active timer', s:'global · works from anywhere' },
-    { k:['Ctrl','Shift',"'"], v:'stop the active timer',  s:'global · works from anywhere' },
-    { k:['Ctrl','Shift','H'], v:'add a workstream',       s:'global · opens popover if closed' },
-    { k:['Tab'],              v:'next workstream',        s:'inside the popover', dim:true },
-    { k:['Shift','Tab'],      v:'previous workstream',    s:'inside the popover', dim:true },
-    { k:['↵'],                v:'commit selection',       s:'switches the running timer', dim:true },
-    { k:['Esc'],              v:'dismiss popover',        s:'no changes made', dim:true },
+    { k:['Ctrl','Shift','/'], v:'open / close popover',  s:'glance, switch, dismiss · global' },
+    { k:['Ctrl','Shift',"'"], v:'find a workstream',     s:'opens the popover + filter box · global' },
+    { k:['Ctrl','Shift',';'], v:'stop the active timer', s:'stops + writes the entry · global' },
+    { k:['Ctrl','Shift','H'], v:'add a workstream',      s:'global · opens popover if closed' },
+    { k:['↵'],                v:'start / switch timer',  s:'runs the selected workstream', dim:true },
+    { k:['Tab'],              v:'next workstream',       s:'inside the popover', dim:true },
+    { k:['Shift','Tab'],      v:'previous workstream',   s:'inside the popover', dim:true },
+    { k:['Esc'],              v:'dismiss popover',       s:'no changes made', dim:true },
   ];
   return `<div class="pv pv-ref">
     <span class="pv-lbl">keyboard reference</span>
     <h1>Four hotkeys, four verbs.</h1>
-    <div class="lede">Distinct, no overlap. <span class="pv-mono">;</span> and <span class="pv-mono">'</span> sit next to each other on the keyboard — start and stop live where the muscle memory already is. <span class="pv-mono">/</span> opens the surface that ties it all together; <span class="pv-mono">H</span> adds a workstream.</div>
+    <div class="lede">Distinct, no overlap. <span class="pv-mono">/</span> opens the surface that ties it together; <span class="pv-mono">'</span> drops into the workstream filter; <span class="pv-mono">;</span> stops the running timer; <span class="pv-mono">H</span> adds a workstream. You <em>start</em> a timer by selecting a workstream in the list and pressing <span class="pv-mono">↵</span>.</div>
     <div class="pv-ref-grid">${rows.map(r => `<div class="pv-ref-cell${r.dim?' dim':''}">${combo(r.k, r.dim)}<div class="verb">${esc(r.v)}</div><div class="sub">${esc(r.s)}</div></div>`).join('')}</div>
   </div>`;
 }
@@ -780,10 +815,12 @@ function render() {
   // keep the highlighted row inside the (capped, scrollable) switcher viewport
   const selRow = $root().querySelector('.pv-row.selected');
   if (selRow && selRow.scrollIntoView) selRow.scrollIntoView({ block:'nearest' });
-  // autofocus add fields
+  // autofocus add fields / the find box
   if (S.adding) {
     const id = S.addStage === 'engagement' ? 'pv-add-eng' : 'pv-add-client';
     const el = document.getElementById(id); if (el && !el.disabled) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  } else if (S.finding) {
+    const el = document.getElementById('pv-find'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
   }
   reportHeight();   // hug the native popover window to the card's height
 }
@@ -802,6 +839,7 @@ function ensureTick() {
 function setTab(id) {
   if (S.adding || (id !== 'workstreams' && id !== 'today') || id === S.tab) return;
   S.tab = id;
+  if (S.finding) { S.finding = false; S.query = ''; }   // leaving the workstream list closes the filter
   cancelSwitchToast();
   render();
 }
@@ -834,7 +872,8 @@ function stopTimer() {
   render();
 }
 function switchTo(idx) {
-  if (idx == null || idx === S.runningIdx) return;
+  if (idx == null || idx === S.runningIdx) { if (S.finding) closeFind(); return; }
+  S.finding = false; S.query = ''; S.openedFromClosed = false;   // committing a pick leaves filter-mode
   const wasRunning = S.base === 'running' && S.runningIdx >= 0;
   // running → switch; idle → just start
   cmdTimer(wasRunning ? 'switch' : 'start', S.list[idx].id);
@@ -864,6 +903,29 @@ function startSwitchToast() {
 }
 function cancelSwitchToast() { if (S.switchToast && S.switchToast.timer) clearInterval(S.switchToast.timer); S.switchToast = null; }
 
+/* Ctrl+Shift+' (and the desktop equivalent / the header affordance): drop the
+ * switcher into filter-mode — a search box over the workstream list, live
+ * substring filter, ↓ to move the highlight into the results, ↵ to switch to
+ * the highlighted one, Esc to leave. `fromClosed` = summoned by the hotkey from
+ * a closed popover, so Esc closes the popover entirely (mirrors the add form). */
+function openFind(fromClosed) {
+  if (S.adding) return;                 // the add form owns the surface — ignore
+  if (S.finding) { const el = document.getElementById('pv-find'); if (el) { el.focus(); el.setSelectionRange(0, el.value.length); } return; }
+  if (S.tab !== 'workstreams') S.tab = 'workstreams';
+  if (S.emptyMode) return;              // nothing to filter on the empty panels
+  cancelSwitchToast();
+  S.finding = true; S.query = '';
+  S.openedFromClosed = !!fromClosed;
+  if (S.list.length) S.selectedIdx = 0; // highlight the first row (no filter yet)
+  render();
+}
+function closeFind() {
+  S.finding = false; S.query = '';
+  if (S.openedFromClosed) { S.openedFromClosed = false; render(); requestHide(); return; }
+  S.selectedIdx = (S.base === 'running' && S.runningIdx >= 0) ? S.runningIdx : 0;
+  render();
+}
+
 /* Ctrl+Shift+H (and the desktop equivalent): popover visible, add-form expanded,
  * cursor in the client field. Whatever running/idle state we were in is preserved
  * underneath (S.base / S.runningIdx / S.timerStart are untouched), so the running
@@ -878,6 +940,7 @@ function openAddForm(fromClosed) {
   }
   cancelSwitchToast();
   S.openedFromClosed = !!fromClosed;
+  S.finding = false; S.query = '';
   S.adding = true; S.addStage = 'client'; S.addClient = ''; S.addEngagement = ''; S.addBillable = true; S.addBusy = false; S.addSel = 0;
   // if we were on an empty panel, opening add still works
   render();
@@ -975,6 +1038,7 @@ function cancelAdd() {
 function escAction() {
   cancelSwitchToast();
   if (S.adding) { cancelAdd(); return; }
+  if (S.finding) { closeFind(); return; }
   // Esc on the main popover dismisses it. (Browser prototype: no-op hide, so
   // it just clears any selection emphasis.)
   S.selectedIdx = (S.base === 'running' && S.runningIdx >= 0) ? S.runningIdx : 0;
@@ -1019,6 +1083,7 @@ function handleWs(m) {
     case 'hotkey': {
       // desktop hotkey fired while the popover is up — mirror it locally.
       if (m.which === 'add_workstream') { openAddForm(false); }   // popover already visible → not "from closed"
+      else if (m.which === 'open_search') { openFind(false); }    // Ctrl+Shift+' fired while we're up → drop into filter-mode
       else if (m.which === 'popover_toggle') { if (!qp().has('ref')) { popEntry = true; render(); } }   // re-pop the entry animation
       else if (m.which === 'timer_stop') { /* timer_stopped will follow */ }
       break;
@@ -1058,6 +1123,7 @@ function wire() {
           break;
         }
         case 'tab': setTab(el.dataset.v); break;
+        case 'find-open': openFind(false); break;
         case 'add-open': openAddForm(); break;
         case 'add-cancel': cancelAdd(); break;
         case 'add-bill': readAddFields(); S.addBillable = !S.addBillable; render(); break;
@@ -1113,6 +1179,32 @@ function wire() {
       });
     });
   }
+  // find/filter box (Ctrl+Shift+'): live substring filter; ↓/↑ (or Tab) move
+  // the highlight through the matches, ↵ switches to it, Esc leaves filter-mode.
+  if (S.finding) {
+    const inp = root.querySelector('#pv-find');
+    if (inp) {
+      inp.addEventListener('input', () => {
+        S.query = inp.value;
+        const idxs = matchIdxs();
+        if (!idxs.includes(S.selectedIdx)) S.selectedIdx = idxs.length ? idxs[0] : -1;
+        render();
+      });
+      inp.addEventListener('keydown', (e) => {
+        const idxs = matchIdxs();
+        const step = (dir) => {
+          if (!idxs.length) return;
+          let p = idxs.indexOf(S.selectedIdx); if (p < 0) p = dir > 0 ? -1 : 0;
+          S.selectedIdx = idxs[(((p + dir) % idxs.length) + idxs.length) % idxs.length];
+          render();
+        };
+        if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) { e.preventDefault(); step(1); }
+        else if (e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey)) { e.preventDefault(); step(-1); }
+        else if (e.key === 'Enter') { e.preventDefault(); if (idxs.length) switchTo(idxs.includes(S.selectedIdx) ? S.selectedIdx : idxs[0]); }
+        else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+      });
+    }
+  }
 }
 
 /* any interaction in the popover (or the window (re)appearing) defers the
@@ -1131,14 +1223,15 @@ document.addEventListener('keydown', (e) => {
   const k = (e.key || '').toLowerCase();
   if (e.ctrlKey && e.shiftKey) {
     if (k === 'h') { e.preventDefault(); openAddForm(false); return; }
-    // while the add-workstream form is up, the timer hotkeys are suppressed —
+    // while the add-workstream form is up, the timer/find hotkeys are suppressed —
     // the form must be submitted or cancelled first.
     if (S.adding && (k === ';' || k === "'" || k === '"')) { e.preventDefault(); return; }
-    if (k === ';') { e.preventDefault(); if (S.base !== 'running') startTimerOn(S.selectedIdx >= 0 ? S.selectedIdx : 0); return; }
-    if (k === "'" || k === '"') { e.preventDefault(); stopTimer(); return; }
+    if (k === ';') { e.preventDefault(); stopTimer(); return; }                 // v0.3.1: ; stops (the only stop key)
+    if (k === "'" || k === '"') { e.preventDefault(); openFind(false); return; } // v0.3.1: ' opens the workstream filter
     if (k === '/' || k === '?') { e.preventDefault(); /* toggle: in-browser there's nothing to toggle — re-pop the entry animation */ popEntry = true; render(); return; }
   }
-  if (S.adding) return; // add-form inputs handle their own keys
+  if (S.adding) return;  // add-form inputs handle their own keys
+  if (S.finding) return; // the #pv-find input handles ↑/↓/↵/Esc/Tab itself
   if (k === 'escape') { e.preventDefault(); escAction(); return; }
   if (k === 'arrowleft')  { e.preventDefault(); switchTab(-1); return; }
   if (k === 'arrowright') { e.preventDefault(); switchTab(1);  return; }
@@ -1156,7 +1249,8 @@ if (qp().get('tab') === 'today') S.tab = 'today';   // ?tab=today opens straight
 render();
 loadWorkstreams();           // pull the real registry (no-op + keeps mock data if /workstreams 404s)
 loadToday();                 // pull today's day-log (no-op + keeps the seed if /today 404s)
-if (qp().get('add') === '1') openAddForm(true);   // desktop Ctrl+Shift+H launched us straight into add-mode
+if (qp().get('add') === '1') openAddForm(true);     // desktop Ctrl+Shift+H launched us straight into add-mode
+if (qp().get('find') === '1') openFind(true);       // desktop Ctrl+Shift+' launched us straight into filter-mode
 connectWs();
 if (!qp().has('ref')) armIdleDismiss();   // start the idle auto-dismiss clock
 })();

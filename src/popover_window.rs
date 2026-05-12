@@ -212,6 +212,20 @@ impl PopoverWindow {
         self.visible = true;
     }
 
+    /// Show + focus the popover with the workstream filter open
+    /// (Ctrl+Shift+'). `?find=1` boots the page straight into find-mode with
+    /// the "opened from closed → Esc closes the popover" semantics.
+    pub fn show_find(&mut self) {
+        self.capture_foreground();
+        let _ = self
+            .webview
+            .load_url(&format!("http://localhost:{}/popover?find=1", live_view::PORT));
+        self.reposition();
+        self.window.set_visible(true);
+        self.window.focus_window();
+        self.visible = true;
+    }
+
     pub fn hide(&mut self) {
         if !self.visible {
             return;

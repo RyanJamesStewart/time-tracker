@@ -126,8 +126,14 @@ const S = {
   openClients: new Set(), // expanded client names
   openEngs: new Set(),    // expanded "client∷engagement" keys
   busy: false,            // a bulk op in flight
+  showLocked: false,      // exported (locked) entries are hidden by default — nothing to do on them here
 };
 const ekey = (c, e) => c + '∷' + e;
+/* entries we actually draw: by default the exported/locked ones are hidden
+   (they're frozen — there's nothing to change on this page), so a client or
+   engagement whose entries are all locked drops out of the tree entirely. */
+const visible = (ents) => S.showLocked ? ents : ents.filter(e => !e.locked);
+const lockedCount = () => S.entries.reduce((n, e) => n + (e.locked ? 1 : 0), 0);
 function durMin(e) { const m = /^(\d+):(\d{2})$/.exec(String(e.dur || '0:00')); return m ? (+m[1]*60 + +m[2]) : 0; }
 function fmtH(min) { min = Math.max(0, Math.round(min)); const h = Math.floor(min/60), m = min%60; return h + 'h' + (m ? (' ' + m + 'm') : ''); }
 
@@ -227,6 +233,11 @@ function chrome() {
 function pills() {
   return `<div class="am-pillrow">${Object.entries(RANGES).map(([k, l]) => `<div class="am-pill" data-on="${S.range === k ? '1' : '0'}" data-act="range" data-v="${k}">${esc(l)}</div>`).join('')}</div>`;
 }
+function lockToggle() {
+  const n = lockedCount();
+  const lab = S.showLocked ? 'showing exported' : (n ? `${n} exported hidden` : 'exported hidden');
+  return `<span class="am-sw${S.showLocked ? ' on' : ''}" data-act="toggle-showlocked" title="exported entries are read-only — hidden here by default"><span class="t"></span><span class="lab">${esc(lab)}</span></span>`;
+}
 function bulkBtns(client, engagement) {
   const d = S.busy ? ' disabled' : '';
   const eAttr = engagement != null ? ` data-e="${esc(engagement)}"` : '';
@@ -238,11 +249,14 @@ function metaSpan(st) {
 }
 function gridHTML() {
   const t = tree();
+  const hidden = lockedCount();
   if (t.length === 0) {
     return `<div class="am-sec"><div class="am-empty"><div class="bigtt">no entries</div><h3>Nothing recorded${S.range !== 'all' ? ' in this range' : ''} yet.</h3><p>Log some time, then come back here to manage what's billable.</p></div></div>`;
   }
   let rows = '';
   for (const c of t) {
+    const cVis = visible(c.entries);
+    if (cVis.length === 0) continue;          // every entry under this client is locked → drop it
     const cOpen = S.openClients.has(c.client);
     rows += `<div class="am-row am-client" data-act="toggle-client" data-c="${esc(c.client)}">
       <span class="am-twirl${cOpen ? ' open' : ''}">▶</span>
@@ -251,6 +265,8 @@ function gridHTML() {
     </div>`;
     if (!cOpen) continue;
     for (const g of c.engs) {
+      const gVis = visible(g.entries);
+      if (gVis.length === 0) continue;        // all locked under this engagement → drop it
       const gOpen = S.openEngs.has(ekey(c.client, g.engagement));
       rows += `<div class="am-row am-eng" data-act="toggle-eng" data-c="${esc(c.client)}" data-e="${esc(g.engagement)}">
         <span class="am-twirl${gOpen ? ' open' : ''}">▶</span>
@@ -258,7 +274,7 @@ function gridHTML() {
         <span class="am-acts">${bulkBtns(c.client, g.engagement)}</span>
       </div>`;
       if (!gOpen) continue;
-      for (const e of g.entries) {
+      for (const e of gVis) {
         const lk = !!e.locked;
         rows += `<div class="am-row am-entry${lk ? ' am-locked' : ''}">
           <span class="am-twirl"></span>
@@ -271,6 +287,10 @@ function gridHTML() {
         </div>`;
       }
     }
+  }
+  if (rows === '') {
+    // there are entries, but every one of them is locked in an export
+    return `<div class="am-sec"><div class="am-empty"><div class="bigtt">all locked</div><h3>Every recorded entr${S.entries.length === 1 ? 'y is' : 'ies are'} locked in an export.</h3><p>Exported entries are frozen — there's nothing to change here. <button class="am-btn" data-act="toggle-showlocked">Show them anyway</button></p></div></div>`;
   }
   return `<div class="am-sec">${rows}</div>`;
 }
@@ -287,7 +307,7 @@ function render() {
     ${chrome()}
     <div class="am-head">
       <div><h1>Admin · billable</h1><div class="am-sub">Manage what's billable, client by client. Use the buttons on a client or engagement row to flip everything under it at once — exported (locked) entries are left alone — or open an engagement and toggle individual entries. Changes here rewrite the recorded CSV directly.</div></div>
-      ${pills()}
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:10px;flex:0 0 auto">${pills()}${lockToggle()}</div>
     </div>
     ${body}
   </div></div>`;
@@ -304,6 +324,7 @@ function wire() {
         case 'reload': load(); break;
         case 'toggle-client': { const c = el.dataset.c; if (S.openClients.has(c)) S.openClients.delete(c); else S.openClients.add(c); render(); break; }
         case 'toggle-eng': { const k = ekey(el.dataset.c, el.dataset.e); if (S.openEngs.has(k)) S.openEngs.delete(k); else S.openEngs.add(k); render(); break; }
+        case 'toggle-showlocked': S.showLocked = !S.showLocked; render(); break;
         case 'bulk-bill': bulk(el.dataset.c, ('e' in el.dataset) ? el.dataset.e : null, true); break;
         case 'bulk-nonbill': bulk(el.dataset.c, ('e' in el.dataset) ? el.dataset.e : null, false); break;
         case 'toggle-entry': { const e = S.entries.find(x => x.id === el.dataset.id); if (e) toggleEntry(e); break; }

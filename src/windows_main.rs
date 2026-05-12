@@ -234,21 +234,25 @@ fn open_recorded_in_browser() {
 
 // Fallback path, used only when the native popover window (popover_window.rs)
 // couldn't be created — e.g. no WebView2 runtime. Opens /popover in the
-// default browser. `add=1` expands the add-workstream form on load.
+// default browser. `?add=1` expands the add-workstream form on load;
+// `?find=1` drops straight into the workstream filter.
 #[cfg(feature = "live-view")]
 fn open_popover_browser() {
-    open_popover_browser_inner(false)
+    open_popover_browser_inner(None)
 }
 #[cfg(feature = "live-view")]
 fn open_popover_browser_add() {
-    open_popover_browser_inner(true)
+    open_popover_browser_inner(Some("add=1"))
 }
 #[cfg(feature = "live-view")]
-fn open_popover_browser_inner(add_mode: bool) {
-    let url = if add_mode {
-        format!("http://localhost:{}/popover?add=1", live_view::PORT)
-    } else {
-        format!("http://localhost:{}/popover", live_view::PORT)
+fn open_popover_browser_find() {
+    open_popover_browser_inner(Some("find=1"))
+}
+#[cfg(feature = "live-view")]
+fn open_popover_browser_inner(query: Option<&str>) {
+    let url = match query {
+        Some(q) => format!("http://localhost:{}/popover?{}", live_view::PORT, q),
+        None => format!("http://localhost:{}/popover", live_view::PORT),
     };
     open_url_in_browser(&url);
 }
@@ -425,7 +429,9 @@ pub fn run() {
     #[cfg(feature = "live-view")]
     let add_workstream_menu = MenuItem::new("Add workstream  (Ctrl+Shift+H)", true, None);
     let timer_start_menu = MenuItem::new("Start timer…", true, None);
-    let timer_stop_menu = MenuItem::new("Stop timer  (Ctrl+Shift+' or ;)", true, None);
+    let timer_stop_menu = MenuItem::new("Stop timer  (Ctrl+Shift+;)", true, None);
+    #[cfg(feature = "live-view")]
+    let find_workstream_menu = MenuItem::new("Find workstream…  (Ctrl+Shift+')", true, None);
     // v0.2: "quick entry" lost its hotkey (Ctrl+Shift+H now adds a
     // workstream); kept here as "Log a block…" until Recorded Time's
     // write path lands. In a tray-only build (no live-view) it stays the
@@ -451,6 +457,8 @@ pub fn run() {
     menu.append(&PredefinedMenuItem::separator()).unwrap();
     #[cfg(feature = "live-view")]
     menu.append(&add_workstream_menu).unwrap();
+    #[cfg(feature = "live-view")]
+    menu.append(&find_workstream_menu).unwrap();
     menu.append(&timer_start_menu).unwrap();
     menu.append(&timer_stop_menu).unwrap();
     menu.append(&quick_entry_menu).unwrap();
@@ -467,6 +475,8 @@ pub fn run() {
     let menu_ids = MenuIds {
         #[cfg(feature = "live-view")]
         add_workstream: add_workstream_menu.id().clone(),
+        #[cfg(feature = "live-view")]
+        find_workstream: find_workstream_menu.id().clone(),
         quick_entry: quick_entry_menu.id().clone(),
         timer_start: timer_start_menu.id().clone(),
         timer_stop: timer_stop_menu.id().clone(),
@@ -614,11 +624,11 @@ pub fn run() {
                     popup.show(PopupMode::QuickEntry, "hotkey");
                 }
             } else if hk.id == hotkey_ids.timer_start {
-                // v0.3: Ctrl+Shift+; no longer pops the start-timer prompt — in
-                // practice you start a timer by picking a workstream in the
-                // popover (Enter on the list) or via Ctrl+Shift+H. This slot now
-                // mirrors Ctrl+Shift+' (stop + write the entry, no popup) so
-                // muscle memory for either key just stops the timer.
+                // v0.3: Ctrl+Shift+; is the (only) "stop the running timer + write
+                // the entry" hotkey — no popup. Starting a timer happens by
+                // picking a workstream in the popover (Enter on the list) or via
+                // Ctrl+Shift+H. (The no-feature build keeps the old confirm-popup
+                // since it has no headless command path.)
                 usage_loop.hotkey_fire("timer_stop", true);
                 live_bus.hotkey("timer_stop");
                 #[cfg(feature = "live-view")]
@@ -626,13 +636,28 @@ pub fn run() {
                 #[cfg(not(feature = "live-view"))]
                 popup.show(PopupMode::TimerStop, "hotkey");
             } else if hk.id == hotkey_ids.timer_stop {
-                usage_loop.hotkey_fire("timer_stop", true);
-                live_bus.hotkey("timer_stop");
-                // v0.3: Ctrl+Shift+' just stops the running timer + writes the
-                // entry — no popup. (The no-feature build keeps the old
-                // confirm-popup since it has no headless command path.)
+                // v0.3.1: Ctrl+Shift+' opens the popover's workstream *filter*
+                // (was: stop the timer — that's now Ctrl+Shift+; only). If the
+                // popover is already up, just tell the page to drop into find-mode;
+                // if it's hidden, summon it straight into find-mode (?find=1).
+                usage_loop.hotkey_fire("open_search", true);
                 #[cfg(feature = "live-view")]
-                popup.cmd_timer_stop();
+                {
+                    match popover_window.as_mut() {
+                        Some(pw) => {
+                            if pw.is_visible() {
+                                live_bus.hotkey("open_search");
+                                pw.show(false);
+                            } else {
+                                pw.show_find();
+                            }
+                        }
+                        None => {
+                            live_bus.hotkey("open_search");
+                            open_popover_browser_find();
+                        }
+                    }
+                }
                 #[cfg(not(feature = "live-view"))]
                 popup.show(PopupMode::TimerStop, "hotkey");
             } else if hk.id == hotkey_ids.popover_toggle {
@@ -671,6 +696,24 @@ pub fn run() {
                     None => {
                         live_bus.hotkey("add_workstream");
                         open_popover_browser_add();
+                    }
+                }
+                continue;
+            }
+            #[cfg(feature = "live-view")]
+            if menu_evt.id == menu_ids.find_workstream {
+                match popover_window.as_mut() {
+                    Some(pw) => {
+                        if pw.is_visible() {
+                            live_bus.hotkey("open_search");
+                            pw.show(false);
+                        } else {
+                            pw.show_find();
+                        }
+                    }
+                    None => {
+                        live_bus.hotkey("open_search");
+                        open_popover_browser_find();
                     }
                 }
                 continue;
@@ -750,6 +793,8 @@ struct HotkeyRegistration {
 struct MenuIds {
     #[cfg(feature = "live-view")]
     add_workstream: MenuId,
+    #[cfg(feature = "live-view")]
+    find_workstream: MenuId,
     quick_entry: MenuId,
     timer_start: MenuId,
     timer_stop: MenuId,
@@ -822,8 +867,8 @@ fn register_hotkeys(
     let mut failures = Vec::new();
     let mut outcomes = Vec::new();
     register_or_warn(manager, add_workstream, "add_workstream", "Ctrl+Shift+H (add workstream)", &mut failures, &mut outcomes);
-    register_or_warn(manager, timer_start, "timer_start", "Ctrl+Shift+; (timer start)", &mut failures, &mut outcomes);
-    register_or_warn(manager, timer_stop,  "timer_stop", "Ctrl+Shift+' (timer stop)",  &mut failures, &mut outcomes);
+    register_or_warn(manager, timer_start, "timer_start", "Ctrl+Shift+; (timer stop)", &mut failures, &mut outcomes);
+    register_or_warn(manager, timer_stop,  "timer_stop", "Ctrl+Shift+' (find workstream)",  &mut failures, &mut outcomes);
     register_or_warn(manager, popover_toggle, "popover_toggle", "Ctrl+Shift+/ (popover)",   &mut failures, &mut outcomes);
 
     HotkeyRegistration {
