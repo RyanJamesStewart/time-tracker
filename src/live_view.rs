@@ -132,7 +132,6 @@ pub fn start(
                         axum::routing::patch(api_entries_patch).delete(api_entries_delete),
                     )
                     .route("/api/entries/bulk-billable", post(api_entries_bulk_billable))
-                    .route("/api/entries/dedupe", post(api_entries_dedupe))
                     .route("/api/clients", get(api_clients_list).post(api_clients_create))
                     .route("/api/export", post(api_export_create))
                     .route("/api/exports", get(api_exports_list))
@@ -1319,11 +1318,22 @@ async fn api_entries_patch(
     }
 }
 
+/// True if two CSV rows describe the same entry — they agree on the immutable
+/// identity columns 0..8 (date, staff, client, engagement, narrative, minutes,
+/// hours, billable). Used to find the row we appended to roll a half-done move
+/// back. (Two rows that match here are interchangeable for that purpose.)
+fn rows_ident_match(a: &[String], b: &[String]) -> bool {
+    a.len() >= 8 && b.len() >= 8 && a[0..8] == b[0..8]
+}
+
 /// Move an entry from `src_stem`'s monthly CSV to `dest_stem`'s, applying any
-/// other patched fields on the way. Two serialized rewrites on the writer
-/// thread: (1) append the (patched) row to the destination month, then
-/// (2) remove the original from the source month. If (2) fails after (1)
-/// landed, the entry exists in both months — visible & recoverable; we say so.
+/// other patched fields on the way. The two monthly files can't be rewritten in
+/// one atomic step, so this is "commit all, else commit nothing": (1) append the
+/// (patched) row to the destination month; (2) remove the original from the
+/// source month. If (2) fails, (3) roll back — delete the row we just appended
+/// to the destination — so the entry stays exactly where it was. The only way
+/// to end up with a leftover copy is if the rollback *also* fails (both monthly
+/// CSVs locked at once), and we say so plainly if that happens.
 async fn move_entry_to_month(
     state: AppState,
     src_stem: &str,
@@ -1331,10 +1341,19 @@ async fn move_entry_to_month(
     dest_stem: &str,
     body: PatchEntryBody,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    // Read the source row, apply the patch fields to a clone.
-    let src = match read_csv_file(src_stem) {
-        Some(f) => f,
-        None => return err_json(StatusCode::NOT_FOUND, "no CSV file for that entry"),
+    // Read the source row (needed verbatim to re-create it in the new month),
+    // distinguishing "file genuinely gone" from "file held open by Excel etc."
+    let src = match std::fs::read(monthly_csv_path(src_stem)) {
+        Ok(bytes) => CsvFile::parse(&String::from_utf8_lossy(&bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return err_json(StatusCode::NOT_FOUND, "no such entry")
+        }
+        Err(_) => {
+            return err_json(
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("couldn't read {src_stem}'s CSV — close any program holding it (Excel?) and try again"),
+            )
+        }
     };
     if n == 0 || n > src.rows.len() {
         return err_json(StatusCode::NOT_FOUND, "no such entry");
@@ -1364,7 +1383,7 @@ async fn move_entry_to_month(
         }),
     );
     if !matches!(append_res, RewriteResult::Written) {
-        return rewrite_err_response(append_res);
+        return rewrite_err_response(append_res); // nothing changed yet
     }
 
     // (2) remove the original row from the source month.
@@ -1382,14 +1401,39 @@ async fn move_entry_to_month(
         }),
     );
     if !matches!(del_res, RewriteResult::Written) {
-        let detail = match &del_res {
+        let del_detail = match &del_res {
             RewriteResult::Locked(m) | RewriteResult::Error(m) => format!(" ({m})"),
             _ => String::new(),
         };
-        return err_json(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("the entry was copied into {dest_stem}, but couldn't be removed from {src_stem} — close any program holding that month's CSV, then delete the leftover copy{detail}"),
+        // (3) roll back: delete the row we appended to the destination. The
+        // appended row is the last one whose identity columns match `moved`.
+        let moved_ident = moved.clone();
+        let rollback_res = state.csv_writer.rewrite_blocking(
+            dest_stem,
+            Box::new(move |cur| {
+                let bytes = cur.ok_or_else(|| "rollback: destination CSV vanished".to_string())?;
+                let mut file = CsvFile::parse(&String::from_utf8_lossy(bytes));
+                let pos = file.rows.iter().rposition(|r| rows_ident_match(r, &moved_ident));
+                match pos {
+                    Some(i) => {
+                        file.rows.remove(i);
+                        Ok(file.render())
+                    }
+                    None => Err("rollback: appended copy not found in destination".to_string()),
+                }
+            }),
         );
+        return match rollback_res {
+            RewriteResult::Written => err_json(
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("couldn't move the entry — {src_stem}'s CSV is in use, so nothing was changed{del_detail}. Close any program holding that file and try again."),
+            ),
+            // Rollback itself failed → the copy in `dest_stem` is real and stuck.
+            _ => err_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("the entry was copied into {dest_stem} but couldn't be removed from {src_stem}, and the copy in {dest_stem} couldn't be undone either{del_detail} — close any program holding those CSVs, then delete the leftover copy in {dest_stem}."),
+            ),
+        };
     }
 
     // The source delete shifted later rows' positional ids — re-point the
@@ -1679,98 +1723,6 @@ async fn api_entries_bulk_billable(
         StatusCode::OK,
         Json(serde_json::json!({ "updated": updated, "skipped_locked": skipped_locked })),
     )
-}
-
-// ---- POST /api/entries/dedupe -------------------------------------------
-
-/// Remove exact-duplicate entries — rows that are identical in date, client,
-/// engagement, narrative, minutes and billable (i.e. the same work logged more
-/// than once, e.g. a double-tap or an aborted move that left a stray copy on
-/// the same day). Keeps the *last* one in scan order (= the latest created) and
-/// drops the earlier copies. A duplicate group that contains a row locked in an
-/// export is left entirely alone. Rewrites each affected month's CSV once and
-/// re-points the export-lock manifest for every removed row. Response:
-/// `{ removed, files_touched }`.
-async fn api_entries_dedupe(State(state): State<AppState>) -> impl IntoResponse {
-    let locked = ExportManifest::load().locked_ids();
-    // Fingerprint a data row by what makes two rows "the same entry". The date
-    // is normalised through `parse_entry_date` so a legacy ISO row and a v0.3
-    // date row for the same day collapse together.
-    let fp = |r: &[String]| -> String {
-        let g = |i: usize| r.get(i).map(String::as_str).unwrap_or("");
-        let date = parse_entry_date(g(0)).map(|d| d.to_string()).unwrap_or_else(|| g(0).trim().to_string());
-        let mins: i64 = g(5).parse().unwrap_or(0);
-        let bill = g(7).eq_ignore_ascii_case("true");
-        format!("{date}\u{1}{}\u{1}{}\u{1}{}\u{1}{mins}\u{1}{bill}", g(2).trim(), g(3).trim(), g(4))
-    };
-
-    let mut removed = 0usize;
-    let mut files_touched = 0usize;
-    for stem in stems_for_window(None) {
-        let Some(file) = read_csv_file(&stem) else { continue; };
-        // group 0-based row indices by fingerprint
-        let mut groups: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
-        for (i, r) in file.rows.iter().enumerate() {
-            groups.entry(fp(r)).or_default().push(i);
-        }
-        // collect the indices to drop: every member but the last, *unless* the
-        // group has a locked row (then leave the whole group alone).
-        let mut drop_set: BTreeSet<usize> = BTreeSet::new();
-        for idxs in groups.values() {
-            if idxs.len() < 2 {
-                continue;
-            }
-            let any_locked = idxs.iter().any(|&i| locked.contains(&format!("{stem}:{}", i + 1)));
-            if any_locked {
-                continue;
-            }
-            for &i in &idxs[..idxs.len() - 1] {
-                drop_set.insert(i);
-            }
-        }
-        if drop_set.is_empty() {
-            continue;
-        }
-        let n_drop = drop_set.len();
-        let drop_for_closure = drop_set.clone();
-        let res = state.csv_writer.rewrite_blocking(
-            &stem,
-            Box::new(move |cur| {
-                let bytes = cur.ok_or_else(|| "the month's CSV vanished mid-dedupe".to_string())?;
-                let mut f = CsvFile::parse(&String::from_utf8_lossy(bytes));
-                // remove highest index first so the lower indices stay valid
-                for &i in drop_for_closure.iter().rev() {
-                    if i < f.rows.len() {
-                        f.rows.remove(i);
-                    }
-                }
-                Ok(f.render())
-            }),
-        );
-        match res {
-            RewriteResult::Written => {
-                // re-point the export-lock manifest for each deleted row; process
-                // the highest position first so the per-delete shifts compose.
-                let mut manifest = ExportManifest::load();
-                let mut changed = false;
-                for &i in drop_set.iter().rev() {
-                    if manifest.shift_after_delete(&stem, i + 1) {
-                        changed = true;
-                    }
-                }
-                if changed {
-                    if let Err(e) = manifest.save() {
-                        tracing::error!(error = %e, stem = %stem, "dedupe: rows removed but export lock manifest shift failed to persist — lock ids in {stem} are now off-by-one");
-                    }
-                }
-                removed += n_drop;
-                files_touched += 1;
-            }
-            other => return rewrite_err_response(other),
-        }
-    }
-
-    (StatusCode::OK, Json(serde_json::json!({ "removed": removed, "files_touched": files_touched })))
 }
 
 // ---- GET /api/clients ; POST /api/clients -------------------------------
