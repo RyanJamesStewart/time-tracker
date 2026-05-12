@@ -48,7 +48,7 @@
 
   <Identity Name="RyanStewart.TimeTracker"
             Publisher="CN=Ryan Stewart, O=Ryan Stewart, L=Bellingham, S=Washington, C=US"
-            Version="0.1.0.11" />
+            Version="0.3.0.0" />
 
   <Properties>
     <DisplayName>Time Tracker</DisplayName>
