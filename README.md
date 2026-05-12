@@ -29,10 +29,14 @@ anywhere — rebindable in `%LOCALAPPDATA%\TimeTracker\config.toml` under `[hotk
 
 | Hotkey | Action |
 | --- | --- |
-| `Ctrl+Shift+;` | Start the timer |
-| `Ctrl+Shift+'` | Stop the timer (writes the entry immediately) |
 | `Ctrl+Shift+/` | Open / close the tracker popover |
-| `Ctrl+Shift+H` | Add a workstream (client · engagement) |
+| `Ctrl+Shift+'` | Open the popover's workstream filter — type to filter, ↓/Enter to pick (picking a workstream starts a timer on it) |
+| `Ctrl+Shift+;` | Stop the running timer — writes the entry immediately, no confirm |
+| `Ctrl+Shift+H` | Open the popover ready to add a workstream (client · engagement) |
+
+There's no separate *start-timer* hotkey: you start a timer by opening the
+popover (`Ctrl+Shift+/`, or `Ctrl+Shift+'` to filter), picking the workstream
+you're working on, and pressing Enter. `Ctrl+Shift+;` stops it.
 
 - **One-off blocks**: right-click the tray icon → *Log a block…*.
 - **Review / edit / export**: open the dashboard from the popover, or go to

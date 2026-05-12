@@ -131,16 +131,23 @@ stop popup are NOT what ships). On the partner's machine:
    commented-out `[hotkeys]` template for rebinds (live now — a hand-edited
    rebind takes effect on next launch). Settings *GUI* is v1.1.
 4. Demo the **four** hotkeys of the live-view build:
+   - `Ctrl+Shift+/` → toggles the popover
+   - `Ctrl+Shift+'` → opens the popover's **workstream filter** (type to filter,
+     ↓ to pick); picking a workstream **starts a timer on it** — this is how you
+     start timing, there is no separate start hotkey
+   - `Ctrl+Shift+;` → **stops the running timer + writes the entry, no popup**.
+     Disclose this. (There's an "undo" affordance; rows are also editable on the
+     Recorded Time page.)
    - `Ctrl+Shift+H` → opens the tray **popover** with the add-workstream form
      expanded (NOT a quick-entry popup — that's the tray "Log a block…" item)
-   - `Ctrl+Shift+;` → start-timer popup
-   - `Ctrl+Shift+'` → **stops the timer immediately + writes the entry, no
-     popup**. Disclose this. (There's an "undo" affordance; rows are also
-     editable on the Recorded Time page.)
-   - `Ctrl+Shift+/` → toggles the popover
+   - *Config-key gotcha:* in `config.toml` the rebind keys are still named
+     `timer_start` / `timer_stop` for historical reasons — `timer_start`'s combo
+     is the *stop* hotkey, `timer_stop`'s combo opens the *filter*. The template
+     comments spell it out.
 5. **Excel hotkey takeover disclosure**: "Once this is running,
-   `Ctrl+Shift+;` and `Ctrl+Shift+'` trigger the timer instead of Excel's
-   insert-time / copy-value-above. Rebind via `[hotkeys]` in `config.toml`."
+   `Ctrl+Shift+;` (stop the timer) and `Ctrl+Shift+'` (workstream filter)
+   shadow Excel's insert-time / copy-value-above. Rebind via `[hotkeys]` in
+   `config.toml`."
 6. Show CSV file location: `%USERPROFILE%\TimeTracker\YYYY-MM.csv`; show the
    Recorded Time / Export pages at `http://localhost:17893/recorded`.
 7. Demo: open the CSV in Excel, log a new entry via a hotkey, verify it

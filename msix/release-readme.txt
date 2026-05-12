@@ -3,7 +3,8 @@ Time Tracker
 
 A small time-logging app that lives in your system tray. Start a timer when you
 begin a task, stop it when you're done, and it writes the entry to a spreadsheet
-for you. No window to manage -- it sits quietly in the corner of the taskbar.
+for you -- one row per stretch of work. No window to manage; it sits quietly in
+the corner of the taskbar.
 
 
 How to install
@@ -37,14 +38,24 @@ After installing
 The hotkeys (these work from anywhere -- you don't need the window focused)
 --------------------------------------------------------------------------
 
-   Ctrl + Shift + ;     Start the timer
-   Ctrl + Shift + '     Stop the timer  (writes the entry right away -- no confirm)
    Ctrl + Shift + /     Open or close the tracker popover
-   Ctrl + Shift + H     Add a workstream
+   Ctrl + Shift + '     Open the workstream filter -- type a few letters, then
+                        pick one with the arrow keys + Enter to start its timer
+   Ctrl + Shift + ;     Stop the running timer  (writes the entry right away,
+                        no confirm prompt)
+   Ctrl + Shift + H     Open the popover, ready to add a new workstream
+
+To start timing: open the popover (Ctrl+Shift+/  -- or  Ctrl+Shift+'  to jump
+straight to the filter), pick the workstream you're working on, press Enter.
+To stop: Ctrl+Shift+; . (There's no separate "start the timer" key -- starting
+always goes through picking a workstream in the popover.)
 
 If one of these keys is already used by another program, Time Tracker tells you
 on launch. You can change them: open  %LOCALAPPDATA%\TimeTracker\config.toml  in
-Notepad and edit the  [hotkeys]  section, then restart Time Tracker.
+Notepad and edit the  [hotkeys]  section, then restart Time Tracker. (Heads up:
+in that file the two keys are still named  timer_start  and  timer_stop  for
+historical reasons -- timer_start's combo is the *stop* hotkey and timer_stop's
+combo opens the *filter*; the comments next to them say so.)
 
 
 Logging a one-off block

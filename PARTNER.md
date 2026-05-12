@@ -24,23 +24,28 @@ partner just opens the package.
    `[identity] staff = "<partner first name>"`, then quit + relaunch the tracker.
 5. **Test the four hotkeys live with the partner** (this is the silent-failure
    prevention). The shipping build is the **live-view build** — its hotkeys:
-   - `Ctrl+Shift+H` → opens the tray **popover**, with the "add workstream"
-     form expanded. (Quick one-off block entry is the **"Log a block…"** item
-     in the tray menu, not a hotkey.)
-   - `Ctrl+Shift+;` → start-timer popup appears.
-   - `Ctrl+Shift+'` → **stops the running timer immediately and writes the
+   - `Ctrl+Shift+/` → toggles the popover (also: tray menu → "Open popover").
+   - `Ctrl+Shift+'` → opens the popover's **workstream filter** — type a few
+     letters, ↓ to pick; picking a workstream **starts a timer on it**. This is
+     how you start timing — there's no separate start-timer hotkey.
+   - `Ctrl+Shift+;` → **stops the running timer immediately and writes the
      entry — no popup, no rounding/cancel.** Tell the partner this: if they
      fat-finger it mid-task the timer stops; there's a brief **"stopped — undo"**
      affordance in the popover/dashboard, and the row is always editable on the
-     Recorded Time page (`Ctrl+Shift+/` → popover → "Open Recorded Time", or
+     Recorded Time page (popover → "Open Recorded Time", or
      `http://localhost:17893/recorded`).
-   - `Ctrl+Shift+/` → toggles the popover (also: tray menu → "Open popover").
+   - `Ctrl+Shift+H` → opens the tray **popover**, with the "add workstream"
+     form expanded. (Quick one-off block entry is the **"Log a block…"** item
+     in the tray menu, not a hotkey.)
    - If any of these doesn't fire, the app shows a warning box on launch listing
      the conflict — read it together; rebind in `config.toml` under `[hotkeys]`
-     (the file has a commented-out template).
-   - *(This supersedes the older `Ctrl+Shift+H = quick-entry popup` / confirmable-
-     stop description in SPEC §3.1–3.2, which describes the `--no-feature`
-     tray-only build.)*
+     (the file has a commented-out template). Note: those keys are still named
+     `timer_start` / `timer_stop` in the file for historical reasons —
+     `timer_start`'s combo is the *stop* hotkey, `timer_stop`'s combo opens the
+     *filter*; the template comments say so.
+   - *(This supersedes the older `Ctrl+Shift+H = quick-entry popup` / `; = start`
+     / `' = confirmable stop` description in SPEC §3.1–3.2, which describes the
+     `--no-feature` tray-only build.)*
 
 **Future updates:** ship a new `.msix`, signed the same way (Trusted Signing,
 `public-trust` profile). The partner machine already trusts the chain, so the new
@@ -50,7 +55,7 @@ URL later and updates become automatic + silent.
 ## How they use it (verbal walkthrough)
 
 - **Hotkey/tray-driven, no window-management.** The popover (`Ctrl+Shift+/` or tray → "Open popover") is the daily driver — pick a workstream, start/stop the timer. Quick one-off blocks: tray → **"Log a block…"** → a small popup (client + engagement + narrative + duration like `1.5h`/`90m` + billable). The popup appears centered on the monitor under the cursor.
-- **Timer**: `Ctrl+Shift+;` start (popup for fields) → walk away → come back → `Ctrl+Shift+'` stop. **Stop is immediate** — it writes the entry with the elapsed time, no confirm dialog. There's a brief "stopped — undo" affordance, and every row is editable later on the **Recorded Time** page (popover → "Open Recorded Time", or `http://localhost:17893/recorded`).
+- **Timer**: open the popover (`Ctrl+Shift+/`, or `Ctrl+Shift+'` for the filter), pick the workstream → the timer starts → walk away → come back → `Ctrl+Shift+;` stops it. **Stop is immediate** — it writes the entry with the elapsed time, no confirm dialog. There's a brief "stopped — undo" affordance, and every row is editable later on the **Recorded Time** page (popover → "Open Recorded Time", or `http://localhost:17893/recorded`).
 - **All entries land in `%USERPROFILE%\TimeTracker\<YYYY-MM>.csv`**. One file per month. Excel-friendly. Open whenever; edit in Excel or on the Recorded Time page.
 - **Don't edit the CSV in Excel while the timer is running** — Excel locks the file; the tracker queues the entry and drains when Excel releases. End-of-day Excel review is fine. (The Recorded Time page also goes through the tracker's one writer thread, so editing there + a hotkey can't corrupt the file.)
 - **If you sleep with a timer running**, the elapsed time may be very large — sanity-check it on the Recorded Time page and adjust the row. (The egui stop popup in the tray-only build prompts ">12h — confirm" here; the live-view build's immediate stop relies on the Recorded Time editor instead.)
