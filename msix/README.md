@@ -6,12 +6,9 @@ Per SPEC §6.1 / §6.4. Hand-delivered v1; auto-update infra deferred to v1.1.
 
 1. **Windows 10 SDK** — provides `MakeAppx.exe` and `signtool.exe`.
    Default install path: `C:\Program Files (x86)\Windows Kits\10\bin\<ver>\x64\`.
-2. **Code-signing cert** in your user's Personal cert store. The same
-   cert used for prompt-time deployment per SPEC §6.1. Find the
-   thumbprint with:
-   ```powershell
-   Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Subject -like '*Ryan Stewart*' } | Format-List Subject, Thumbprint
-   ```
+2. **Azure Trusted Signing** set up (account `ryanstewart-signing`, profile
+   `public-trust`) and `az login` done. `sign-trusted.ps1` is the signing
+   path; see `trusted-signing-metadata.json`.
 
 ## One-time edits before first build
 
@@ -31,13 +28,16 @@ From PowerShell on Windows side (in the repo root):
 # First time: generate placeholder visual assets
 .\msix\generate-placeholder-icons.ps1
 
-# Build + sign
-.\msix\build-msix.ps1                          # uses the "best" cert via /a
-.\msix\build-msix.ps1 -Thumbprint AABBCC...    # pin a specific cert
-.\msix\build-msix.ps1 -SkipSign                # build unsigned for local testing
+# Build, then sign via Azure Trusted Signing
+.\msix\build-msix.ps1 -SkipSign                # build the package
+.\msix\sign-trusted.ps1                        # sign release\Install.msix in place
+
+# (Legacy in-script signtool path still works but isn't how releases are made:
+#  .\msix\build-msix.ps1            # /a — best Personal-store cert
+#  .\msix\build-msix.ps1 -Thumbprint AABBCC...   # pin a specific cert)
 ```
 
-Output: `release\RyanStewart.TimeTracker.msix`.
+Output: `release\Install.msix`.
 
 ## Install (what the partner does)
 
@@ -45,15 +45,14 @@ Output: `release\RyanStewart.TimeTracker.msix`.
 
 ```
 release\
-  RyanStewart.TimeTracker.msix     the signed package — this is what ships
-  install.ps1                      power-user helper (-Uninstall / -Launch / WebView2 check)
+  Install.msix      the signed package — this is what ships
+  README.txt        end-user install guide (ships next to Install.msix; source is msix\release-readme.txt)
 ```
 
-Publishing a release: upload the `.msix` (renamed to something self-documenting
-like `Install-right-click-then-press-Install.msix`) as the only asset on a
-GitHub Release. The filename itself is the partner instruction. They:
+Publishing a release: upload `Install.msix` (and `README.txt` beside it) as the
+assets on a GitHub Release. They:
 
-1. Download the `.msix` from the Release page (lands as a single file in their
+1. Download `Install.msix` from the Release page (a single file in their
    Downloads — no zip, no subfolder).
 2. **Right-click → Install** (or double-click — same App Installer dialog).
 3. App Installer shows "Publisher: Ryan Stewart" — they press **Install**.
@@ -69,20 +68,22 @@ Shipping the signed `.msix` itself sidesteps that entirely.
 
 **Uninstall** (their logged time + config are kept either way): Start menu →
 right-click *Time Tracker* → Uninstall, or Settings → Apps → Time Tracker →
-Uninstall. Power-user equivalents from PowerShell:
-`Get-AppxPackage *TimeTracker* | Remove-AppxPackage`, or
-`powershell -ExecutionPolicy Bypass -File .\release\install.ps1 -Uninstall`.
+Uninstall. Power-user equivalent from PowerShell:
+`Get-AppxPackage *TimeTracker* | Remove-AppxPackage`.
 
 Dev/test on this machine:
 ```powershell
-Add-AppxPackage -Path .\release\RyanStewart.TimeTracker.msix -ForceApplicationShutdown
+Add-AppxPackage -Path .\release\Install.msix -ForceApplicationShutdown
 Get-AppxPackage RyanStewart.TimeTracker | Format-List
 ```
 
 ## What lands inside the package
 
+(File on disk is `Install.msix`; the package *identity* inside is still
+`RyanStewart.TimeTracker` — `<Identity Name>` in `AppxManifest.xml`.)
+
 ```
-RyanStewart.TimeTracker.msix
+Install.msix
 ├── AppxManifest.xml         identity, capabilities, autostart, virt opt-out
 ├── time-tracker.exe the cross-compiled release binary
 └── Assets/
@@ -111,7 +112,7 @@ Per SPEC §6.4, reconciled with the **shipping `--features live-view` build**
 build's `Ctrl+Shift+H` = quick-entry popup and `Ctrl+Shift+'` = confirmable
 stop popup are NOT what ships). On the partner's machine:
 0. **Right-click the `.msix` → Install** (downloaded from the GitHub Release as
-   `Install-right-click-then-press-Install.msix`). App Installer shows
+   `Install.msix`). App Installer shows
    "Publisher: Ryan Stewart"; they press **Install**. No warning, no admin, no
    cert step, no command line. — *the steps below are post-install setup, not
    part of the install itself.* (Windows 10 machines without WebView2: if a
@@ -152,7 +153,7 @@ new signed `.msix`; the partner downloads it and right-clicks → Install again.
 App Installer detects the prior version and prompts to update in place. On
 this dev machine:
 ```powershell
-Add-AppxPackage -Path .\release\RyanStewart.TimeTracker.msix -ForceApplicationShutdown
+Add-AppxPackage -Path .\release\Install.msix -ForceApplicationShutdown
 ```
 Either way the user's data (`%LOCALAPPDATA%\TimeTracker\`, `%USERPROFILE%\TimeTracker\`)
 is preserved.
@@ -179,7 +180,7 @@ Get-AppxPackage *TimeTracker* | Remove-AppxPackage -ErrorAction Continue
 Get-AppxPackage *TimeTracker*    # expect: nothing
 
 # 4. Reinstall the LAST known-good MSIX (keep one prior signed build on disk)
-Add-AppxPackage -Path .\release\RyanStewart.TimeTracker-LASTGOOD.msix
+Add-AppxPackage -Path .\release\Install-LASTGOOD.msix
 ```
 
 **If the new version starts but misbehaves** (hotkeys silent, popup won't show,
@@ -193,7 +194,7 @@ Copy-Item "$env:LOCALAPPDATA\TimeTracker\crashes\*"  $env:TEMP\TimeTracker-rollb
 # and (if needed) bump the rollback MSIX's Identity Version to be HIGHER than the
 # bad one even though the code is older. Keep a "rollback-bumped" copy ready.
 Get-AppxPackage *TimeTracker* | Remove-AppxPackage
-Add-AppxPackage -Path .\release\RyanStewart.TimeTracker-ROLLBACK.msix
+Add-AppxPackage -Path .\release\Install-ROLLBACK.msix
 ```
 
 **If user data is corrupted** (rare: typically AV/EDR rollback or disk full mid-write

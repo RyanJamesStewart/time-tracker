@@ -8,7 +8,7 @@ The package is signed with **Azure Trusted Signing** — the cert chains to a ro
 Windows already trusts, so there's no cert-import step and no admin needed. The
 partner just opens the package.
 
-1. **Copy `RyanStewart.TimeTracker.msix` from the USB** to the partner's machine
+1. **Copy `Install.msix` from the USB** to the partner's machine
    (Desktop is fine). That's the only file you need.
 2. **Double-click the `.msix`** in File Explorer (not from an email preview pane).
    App Installer opens → click **Install**. Per-user, no admin.
@@ -46,13 +46,6 @@ partner just opens the package.
 `public-trust` profile). The partner machine already trusts the chain, so the new
 version installs over the old one — still no admin. Wire up an `.appinstaller`
 URL later and updates become automatic + silent.
-
-**Fallback — if Trusted Signing signing fails before the visit:** there's a
-self-signed path in the repo (`msix\make-signing-cert.ps1` + `msix\install.ps1`).
-That one needs you to copy 3 files to the USB (`install.ps1`, `TimeTracker.cer`,
-`RyanStewart.TimeTracker.msix`) and run `install.ps1` as administrator on the partner
-machine — one UAC prompt for the cert import, then it installs. See the script
-headers for details. Only use this if the Trusted Signing flow won't cooperate.
 
 ## How they use it (verbal walkthrough)
 
@@ -121,10 +114,10 @@ If `time-tracker.exe` shows up, the partner's MSP needs to add an ASR exclusion 
 - `msix\AppxManifest.xml` `<Identity Publisher>` is exactly `CN=Ryan Stewart, O=Ryan Stewart, L=Bellingham, S=Washington, C=US` — matches the Trusted Signing cert Subject (profile `public-trust`). Don't change one without the other.
 - `MaxVersionTested="10.0.26100.0"` in the manifest — covers Win10 22H2 through Win11 24H2; no need to know the partner's exact build (it only affects appcompat shims, never install).
 - `cargo xwin build --release --target x86_64-pc-windows-msvc --bin time-tracker` succeeded (note: on this WSL box the build needs `mt.exe` in PATH — `ln -sf /usr/bin/llvm-mt ~/.cargo/bin/mt.exe`).
-- `.\msix\build-msix.ps1 -SkipSign` produced an unsigned `release\RyanStewart.TimeTracker.msix` (the icon-gen self-heal triggers if `msix\Assets\` is empty — though it isn't, the 4 placeholder PNGs are committed).
+- `.\msix\build-msix.ps1 -SkipSign` produced an unsigned `release\Install.msix` (the icon-gen self-heal triggers if `msix\Assets\` is empty — though it isn't, the 4 placeholder PNGs are committed).
 - `.\msix\sign-trusted.ps1` signed it — `signtool verify /pa` passes, Publisher matches the manifest.
 - Smoke-installed the signed `.msix` on your own machine (just double-click it): the four hotkeys (`Ctrl+Shift+H`/`;`/`'`/`/`) + tray menu + "Log a block…" + a CSV write + the Recorded Time page (`http://localhost:17893/recorded`) all work. Then `Get-AppxPackage *TimeTracker* | Remove-AppxPackage` to clean up.
-- USB has exactly: `RyanStewart.TimeTracker.msix`. (Fallback path would also need `install.ps1` + `TimeTracker.cer`, but you're not using that unless Trusted Signing signing breaks.)
+- USB has exactly: `Install.msix`.
 
 ## Contact
 

@@ -284,7 +284,7 @@ cd C:\Users\RyanJ\projects\time-tracker
 # OR: .\msix\build-msix.ps1 -Thumbprint AABBCC...
 
 # Test install on your machine first
-Add-AppxPackage .\release\RyanStewart.TimeTracker.msix
+Add-AppxPackage .\release\Install.msix
 
 # Cleanup if needed
 Get-AppxPackage *TimeTracker* | Remove-AppxPackage

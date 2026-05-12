@@ -6,19 +6,22 @@
 # Prerequisites (Windows side, one-time):
 #   - Windows 10 SDK installed (provides MakeAppx.exe + signtool.exe).
 #     Default location: C:\Program Files (x86)\Windows Kits\10\bin\<ver>\x64\
-#   - Code-signing cert installed in the user's Personal cert store.
-#     The signtool /a flag picks the "best" cert; pass /sha1 <thumbprint>
-#     for explicit selection.
 #   - cargo-xwin built the exe at:
 #       target\x86_64-pc-windows-msvc\release\time-tracker.exe
 #     (Run from WSL: cargo xwin build --release \
 #                    --target x86_64-pc-windows-msvc \
 #                    --bin time-tracker)
 #
+# Signing: the real flow is to build with -SkipSign here, then run
+#   .\msix\sign-trusted.ps1   (Azure Trusted Signing, profile public-trust)
+# which signs release\Install.msix in place. The legacy in-script signtool
+# path (no -SkipSign; -Thumbprint to pin a Personal-store cert, else /a)
+# still works but is not how releases are produced anymore.
+#
 # Usage (from PowerShell on Windows side, in repo root):
-#   .\msix\build-msix.ps1                       # uses defaults
-#   .\msix\build-msix.ps1 -Thumbprint AABBCC..  # pin signing cert
-#   .\msix\build-msix.ps1 -SkipSign             # build unsigned for testing
+#   .\msix\build-msix.ps1 -SkipSign             # build, then sign-trusted.ps1
+#   .\msix\build-msix.ps1                        # legacy in-script signtool
+#   .\msix\build-msix.ps1 -Thumbprint AABBCC..  # legacy: pin signing cert
 
 param(
     [string]$Thumbprint = "",
@@ -34,7 +37,7 @@ $Manifest = Join-Path $RepoRoot "msix\AppxManifest.xml"
 $Assets = Join-Path $RepoRoot "msix\Assets"
 $Release = Join-Path $RepoRoot "release"
 $Staging = Join-Path $env:TEMP ("TimeTracker-msix-staging-" + (Get-Random))
-$Output = Join-Path $Release "RyanStewart.TimeTracker.msix"
+$Output = Join-Path $Release "Install.msix"
 
 Write-Host "==> Pre-flight checks"
 if (-not (Test-Path $Exe)) {
@@ -128,30 +131,29 @@ if (-not $SkipSign) {
 }
 
 # The partner-facing artifact is the signed .msix itself - they download a
-# single file, right-click -> Install (App Installer shows "Publisher: Ryan
+# single file, double-click -> Install (App Installer shows "Publisher: Ryan
 # Stewart" with no warning, since the chain ends at the Microsoft Identity
 # Verification Root CA, already trusted on Win10 1809+/11). The .bat-based
 # bundle was removed: .bat files can't be Authenticode-signed and Windows
 # slapped a "Publisher cannot be verified" warning on them.
 #
-# install.ps1 is still copied into release\ for power-user convenience
-# (-Uninstall, -Launch, dev-test from this machine), but it's NOT part of the
-# Release asset - only the .msix is.
+# README.txt (the end-user install guide) ships next to the .msix;
+# release-readme.txt is its tracked source.
 $MsixDir = Split-Path -Parent $PSCommandPath
-$psSrc = Join-Path $MsixDir "install.ps1"
-if (Test-Path $psSrc) { Copy-Item -Path $psSrc -Destination $Release -Force }
-else { Write-Warning "expected $psSrc to exist; skipping" }
+$readmeSrc = Join-Path $MsixDir "release-readme.txt"
+if (Test-Path $readmeSrc) { Copy-Item -Path $readmeSrc -Destination (Join-Path $Release "README.txt") -Force }
+else { Write-Warning "expected $readmeSrc to exist; skipping" }
 
 Write-Host ""
 Write-Host "==> SUCCESS"
 Write-Host "    Built in:  $Release"
-Write-Host "      RyanStewart.TimeTracker.msix     <- the signed package (this is what ships)"
-Write-Host "      install.ps1                      power-user helper (-Uninstall / -Launch)"
+Write-Host "      Install.msix     <- the signed package (this is what ships)"
+Write-Host "      README.txt       end-user install guide (ships next to Install.msix)"
 Write-Host ""
 Write-Host "To publish:"
-Write-Host "  gh release upload v<X.Y.Z> '$Release\RyanStewart.TimeTracker.msix' --clobber"
+Write-Host "  gh release upload v<X.Y.Z> '$Release\Install.msix' --clobber"
 Write-Host "Partner workflow:"
 Write-Host "  Download the .msix from the Release page -> right-click -> Install. No warning."
 Write-Host "Dev-test on this machine:"
-Write-Host "  Add-AppxPackage -Path '$Release\RyanStewart.TimeTracker.msix' -ForceApplicationShutdown"
+Write-Host "  Add-AppxPackage -Path '$Release\Install.msix' -ForceApplicationShutdown"
 Write-Host "  Inspect:  Get-AppxPackage RyanStewart.TimeTracker | Format-List"

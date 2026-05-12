@@ -1,6 +1,6 @@
 # Time Tracker
 
-### ⬇ [Download the installer](https://github.com/RyanJamesStewart/time-tracker/releases/latest/download/Install-right-click-then-press-Install.msix) &nbsp;·&nbsp; [All releases](https://github.com/RyanJamesStewart/time-tracker/releases)
+### ⬇ [Download the installer](https://github.com/RyanJamesStewart/time-tracker/releases/latest/download/Install.msix) &nbsp;·&nbsp; [All releases](https://github.com/RyanJamesStewart/time-tracker/releases)
 
 A small, fast Windows desktop time tracker. Hotkeys to start/stop a timer or log
 a block, a tray icon, and a built-in dashboard for reviewing your time and
@@ -14,11 +14,11 @@ and would have to be re-committed on every build); it lives on the
 **[Releases page](https://github.com/RyanJamesStewart/time-tracker/releases/latest)** — also linked from the
 *Releases* widget in the right sidebar of this repo's main page.
 
-1. Click **[Download the installer](https://github.com/RyanJamesStewart/time-tracker/releases/latest/download/Install-right-click-then-press-Install.msix)** above. One file (`Install-right-click-then-press-Install.msix`) lands in your Downloads — the filename is the instruction.
+1. Click **[Download the installer](https://github.com/RyanJamesStewart/time-tracker/releases/latest/download/Install.msix)** above. One file (`Install.msix`) lands in your Downloads, with a short `README.txt` beside it on the Releases page — double-click it and press Install.
 2. **Right-click → Install** (or double-click — same App Installer dialog).
 3. Press **Install** in the App Installer dialog. Done — no warning, no admin, no command line, no certificate import.
 
-The package is signed via Azure Trusted Signing; its chain ends at the Microsoft Identity Verification Root CA, which Windows already trusts on Windows 10 1809+ and Windows 11. The first launch checks the Edge WebView2 runtime (needed for the dashboard; ships with Windows 11, and on Windows 10 you'd grab it from <https://aka.ms/webview2> if a panel ever shows blank).
+The package is signed via Azure Trusted Signing; its chain ends at the Microsoft Identity Verification Root CA, which Windows already trusts on Windows 10 1809+ and Windows 11. The dashboard and tray popover need the Edge WebView2 runtime — it ships with Windows 11; on Windows 10, grab it from <https://aka.ms/webview2> if a panel ever shows blank.
 
 **Uninstall** (keeps your logged time and settings): **Start menu → right-click *Time Tracker* → Uninstall** (or *Settings → Apps → Time Tracker → Uninstall*).
 
@@ -66,7 +66,7 @@ cargo test --lib --target x86_64-unknown-linux-gnu        # the platform-agnosti
 Then, on Windows, package + sign + bundle the installer:
 
 ```powershell
-.\msix\build-msix.ps1 -SkipSign      # makes release\RyanStewart.TimeTracker.msix (+ a copy of install.ps1 for testing)
+.\msix\build-msix.ps1 -SkipSign      # makes release\Install.msix (+ README.txt)
 .\msix\sign-trusted.ps1              # signs it via Azure Trusted Signing
 ```
 

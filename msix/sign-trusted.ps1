@@ -1,7 +1,7 @@
 # Sign the MSIX with Azure Trusted Signing (now "Azure Artifact Signing").
 #
 # Run this on your (Ryan's) Windows machine, AFTER building an unsigned package:
-#   .\msix\build-msix.ps1 -SkipSign            # produces release\RyanStewart.TimeTracker.msix (unsigned)
+#   .\msix\build-msix.ps1 -SkipSign            # produces release\Install.msix (unsigned)
 #   .\msix\sign-trusted.ps1                     # signs it in place
 #
 # One-time prerequisites on this machine:
@@ -26,7 +26,7 @@
 # machine installs the .msix with no cert-import step.
 
 param(
-    [string]$MsixPath  = (Join-Path (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)) "release\RyanStewart.TimeTracker.msix"),
+    [string]$MsixPath  = (Join-Path (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)) "release\Install.msix"),
     [string]$Metadata  = (Join-Path $PSScriptRoot "trusted-signing-metadata.json"),
     [string]$DlibPath  = "",                       # auto-discovered if not given
     [string]$TimestampUrl = "http://timestamp.acs.microsoft.com",
@@ -140,7 +140,7 @@ Write-Host "Signed: $MsixPath"
 Write-Host "Publisher should match the AppxManifest <Identity Publisher>:"
 Write-Host "  CN=Ryan Stewart, O=Ryan Stewart, L=Bellingham, S=Washington, C=US"
 Write-Host ""
-Write-Host "Onto the USB:  release\RyanStewart.TimeTracker.msix  (that's it - no .cer, no install.ps1 needed)"
+Write-Host "Onto the USB:  release\Install.msix  (that's it - one file)"
 Write-Host "At the partner: double-click the .msix -> App Installer -> Install. No admin, no cert step."
 Write-Host "  (If Windows shows a brief SmartScreen prompt: More info -> Run anyway. That reputation"
 Write-Host "   clears as installs accumulate; the cert chain itself is trusted from day one.)"
