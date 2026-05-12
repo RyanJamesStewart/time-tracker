@@ -247,6 +247,11 @@
   .rt-modal-foot .rt-spacer { flex:1; }
 
   @keyframes rt-caretblink { 0%,49%{opacity:1} 50%,100%{opacity:0} }
+  /* keyboard: anything interactive gets a visible focus ring (the interactive
+     divs/spans are made focusable in wire()); the row's delete × also shows on
+     keyboard focus, not just mouse hover. */
+  [data-act]:focus-visible, [tabindex="0"]:focus-visible, a:focus-visible { outline:2px solid var(--signal); outline-offset:2px; border-radius:5px; }
+  .rt-row:focus-within .rt-delx { visibility:visible; }
   @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.001s !important; transition-duration:.001s !important; } }
 </style>
 </head>
@@ -531,7 +536,7 @@ function dcell(r, cell, content, cls, placeholder) {
 function billCell(r, dim) {
   const dimc = dim ? ' dim' : '';
   if (r.billable) return `<div class="rt-cellctr"><span class="rt-bill${dimc}"${r.locked ? '' : ` data-act="bill" data-row="${r.id}"`}><span class="d"></span>billable</span></div>`;
-  return `<div class="rt-cellctr"><span class="rt-internal"${r.locked ? '' : ` data-act="bill" data-row="${r.id}"`}>internal</span></div>`;
+  return `<div class="rt-cellctr"><span class="rt-internal"${r.locked ? '' : ` data-act="bill" data-row="${r.id}"`}>non-billable</span></div>`;
 }
 
 /* read row (with hover affordance handled via CSS :hover on .rt-row — we
@@ -615,9 +620,9 @@ function newEntryRow() {
     <div class="rt-editcell multiline ${n.description ? '' : 'ghost'}"><textarea rows="3" placeholder="What did you work on?" data-newfield="description">${esc(n.description)}</textarea></div>
     ${ n.billable
         ? `<div class="rt-cellctr"><span class="rt-bill" data-act="new-bill"><span class="d"></span>billable</span></div>`
-        : `<div class="rt-cellctr"><span class="rt-internal" data-act="new-bill">internal</span></div>` }
+        : `<div class="rt-cellctr"><span class="rt-internal" data-act="new-bill">non-billable</span></div>` }
     <span></span>
-    ${ n.partial ? `<div class="rt-partial"><span class="rt-mono" style="font-size:11px">↩</span> Add a client and engagement to save.<span class="hint">Enter to save · Esc to discard</span></div>` : '' }
+    ${ n.partial ? `<div class="rt-partial"><span class="rt-mono" style="font-size:11px">↩</span> Add a client and engagement to save.<span class="hint">Esc to discard</span></div>` : '' }
   </div>`;
 }
 function deleteRow(r) {
@@ -790,7 +795,13 @@ function applyEdit(ctx, value, reload) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(v) && v !== r.dateISO) { r.dateISO = v; r.date = isoToLabel(v); patch.date = v; }
   } else if (cell === 'dur') {
     const mins = parseDur(v);
-    if (mins != null && mins > 0 && mins !== r.minutes) { r.minutes = mins; r.dur = fmtDur(mins); patch.dur = fmtDur(mins); }
+    if (mins == null || mins <= 0) {
+      // don't silently swallow "1.5 hrs" / "lunch" — say what's wrong, leave the cell as it was
+      showError('Enter a duration like “1:30”, “90”, or “1.5h”.');
+      render();
+      return;
+    }
+    if (mins !== r.minutes) { r.minutes = mins; r.dur = fmtDur(mins); patch.dur = fmtDur(mins); }
   } else if (cell === 'engagement') {
     r.engagement = v.toUpperCase(); patch.engagement = r.engagement;
   } else if (cell === 'client') {
@@ -937,6 +948,17 @@ function unlockEntry(rowId) {
 }
 
 /* ---------- wiring ---------- */
+// Make a [data-act] element keyboard-operable: focusable + Enter/Space → click,
+// plus an aria-label cribbed from its title. Skips native controls and the
+// editable table cells (data-act="edit") — making 50 rows × 5 cells focusable
+// would be a sea of tab stops; cell editing stays mouse-only for now.
+function a11ify(el) {
+  if (el.title && !el.getAttribute('aria-label')) el.setAttribute('aria-label', el.title);
+  if (['A','BUTTON','INPUT','TEXTAREA','SELECT'].includes(el.tagName) || el.dataset.act === 'edit') return;
+  if (!el.hasAttribute('tabindex')) el.tabIndex = 0;
+  if (!el.hasAttribute('role')) el.setAttribute('role', 'button');
+  el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } });
+}
 function wire() {
   const root = $root();
 
@@ -949,6 +971,7 @@ function wire() {
 
   // click delegation
   root.querySelectorAll('[data-act]').forEach(el => {
+    a11ify(el);
     el.addEventListener('click', (ev) => {
       const act = el.dataset.act;
       // let plain nav anchors through

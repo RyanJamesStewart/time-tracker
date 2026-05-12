@@ -98,6 +98,7 @@
   .am-toast-host { position:fixed; left:50%; transform:translateX(-50%); bottom:18px; z-index:200; }
   .am-toast { padding:9px 14px; border-radius:8px; background:var(--ink); color:#fff; font-size:13px; box-shadow:var(--shadow-2); }
   .am-toast.good { background:var(--good); } .am-toast.bad { background:var(--bad); }
+  [data-act]:focus-visible, [tabindex="0"]:focus-visible, a:focus-visible { outline:2px solid var(--signal); outline-offset:2px; border-radius:5px; }
   @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.001s !important; transition-duration:.001s !important; } }
 </style>
 </head>
@@ -313,8 +314,18 @@ function render() {
   </div></div>`;
   wire();
 }
+// keyboard: make a [data-act] div/span focusable + Enter/Space → click, and
+// give icon-only controls an aria-label from their title.
+function a11ify(el) {
+  if (el.title && !el.getAttribute('aria-label')) el.setAttribute('aria-label', el.title);
+  if (['A','BUTTON','INPUT','TEXTAREA','SELECT'].includes(el.tagName)) return;
+  if (!el.hasAttribute('tabindex')) el.tabIndex = 0;
+  if (!el.hasAttribute('role')) el.setAttribute('role', 'button');
+  el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } });
+}
 function wire() {
   $root().querySelectorAll('[data-act]').forEach(el => {
+    a11ify(el);
     el.addEventListener('click', ev => {
       const a = el.dataset.act;
       if (el.tagName === 'A') return;

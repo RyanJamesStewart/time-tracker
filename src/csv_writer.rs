@@ -633,14 +633,33 @@ fn format_row_legacy(e: &Entry) -> Vec<u8> {
     row.into_bytes()
 }
 
-fn csv_escape(s: &str) -> String {
-    let needs_quoting = s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r');
-    if needs_quoting {
-        let escaped = s.replace('"', "\"\"");
-        format!("\"{escaped}\"")
+/// True if a CSV field, written verbatim, would be interpreted as a *formula*
+/// when the file is opened in Excel / Google Sheets — i.e. it begins with
+/// `=`, `+`, `-`, `@`, or a tab / CR / LF. Such fields get a leading `'`
+/// (invisible in Excel) so they're read as literal text. This matters because
+/// the export CSV gets emailed out — a client name like `=cmd|'…'!A1` or a
+/// narrative `=WEBSERVICE("http://…")` must not execute on the recipient's box.
+fn starts_dangerous(s: &str) -> bool {
+    matches!(
+        s.as_bytes().first(),
+        Some(b'=' | b'+' | b'-' | b'@' | b'\t' | b'\r' | b'\n')
+    )
+}
+
+/// Escape a value for one CSV field: spreadsheet formula-injection guard
+/// (`starts_dangerous` → prefix `'`), then RFC-4180 quoting (wrap in `"…"` and
+/// double inner `"`) if it contains a comma / quote / newline. Shared by the
+/// append path (`format_row`) and the read-modify-rewrite path in `live_view`.
+pub fn csv_escape(s: &str) -> String {
+    let mut field = if starts_dangerous(s) {
+        format!("'{s}")
     } else {
         s.to_string()
+    };
+    if field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r') {
+        field = format!("\"{}\"", field.replace('"', "\"\""));
     }
+    field
 }
 
 #[cfg(test)]
@@ -742,6 +761,30 @@ mod tests {
     #[test]
     fn csv_escape_quotes_when_newline() {
         assert_eq!(csv_escape("line1\nline2"), "\"line1\nline2\"");
+    }
+
+    #[test]
+    fn csv_escape_neutralizes_formula_leads() {
+        // Excel/Sheets formula-injection guard: a leading =,+,-,@,tab,CR gets a ' prefix.
+        assert_eq!(csv_escape("=HYPERLINK(\"x\")"), "\"'=HYPERLINK(\"\"x\"\")\"");
+        assert_eq!(csv_escape("=1+1"), "'=1+1");
+        assert_eq!(csv_escape("+SUM(A1)"), "'+SUM(A1)");
+        assert_eq!(csv_escape("@cmd"), "'@cmd");
+        assert_eq!(csv_escape("- bullet point"), "'- bullet point");
+        assert_eq!(csv_escape("\tTabLed"), "'\tTabLed");
+        // ...but normal text and ordinary leading digits/letters are untouched.
+        assert_eq!(csv_escape("Acme Corp"), "Acme Corp");
+        assert_eq!(csv_escape("2026-05-09"), "2026-05-09");
+        assert_eq!(csv_escape("60"), "60");
+        assert_eq!(csv_escape(""), "");
+    }
+
+    #[test]
+    fn row_with_formula_client_is_neutralized() {
+        let mut e = fake_entry();
+        e.client = "=WEBSERVICE(\"http://evil\")".to_string();
+        let s = String::from_utf8(format_row(&e)).unwrap();
+        assert!(s.contains(",\"'=WEBSERVICE("), "client formula should be quoted + ' prefixed in {s:?}");
     }
 
     #[test]

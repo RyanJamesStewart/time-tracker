@@ -18,13 +18,17 @@
                                       capability. Requires Win10 1903+.
 
   MinVersion 10.0.19041.0 (Windows 10 2004): the tray popover calls
-  SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) so a client name on it
-  stays out of a shared screen — that API *fails* (it is NOT a no-op) on
-  builds older than 2004, leaving the popover fully capturable. Since the
-  screen-capture exclusion is a confidentiality *promise*, the floor is
-  raised to 2004 (this drops Win10 1903/1909 — fine for a 2026 accountant's
-  machine; 21H2+ or Win11 in practice). 2004 also satisfies the desktop6
-  property above (which only needs 1903).
+  SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) so a client name on the
+  *tray popover window* stays out of a shared screen — that API *fails* (it
+  is NOT a no-op) on builds older than 2004, leaving the popover fully
+  capturable. NB this only covers the embedded WebView2 popover; the same
+  HTML opened in the user's default browser (Recorded Time / Export / Admin
+  via "Open in browser") is an ordinary window and IS screen-capturable —
+  capture hygiene there is on the user. Since the popover exclusion is still
+  a confidentiality *promise*, the floor is raised to 2004 (this drops Win10
+  1903/1909 — fine for a 2026 accountant's machine; 21H2+ or Win11 in
+  practice). 2004 also satisfies the desktop6 property above (which only
+  needs 1903).
 
   Identity:
     - Name "RyanStewart.TimeTracker" matches SPEC §6.1 bundle identity.
@@ -44,7 +48,7 @@
 
   <Identity Name="RyanStewart.TimeTracker"
             Publisher="CN=Ryan Stewart, O=Ryan Stewart, L=Bellingham, S=Washington, C=US"
-            Version="0.1.0.10" />
+            Version="0.1.0.11" />
 
   <Properties>
     <DisplayName>Time Tracker</DisplayName>

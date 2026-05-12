@@ -14,6 +14,7 @@ pub mod autocomplete;
 pub mod config;
 pub mod crash;
 pub mod csv_writer;
+pub mod datefmt;
 pub mod duration;
 pub mod logging;
 pub mod paths;

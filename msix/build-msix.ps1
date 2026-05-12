@@ -40,6 +40,12 @@ Write-Host "==> Pre-flight checks"
 if (-not (Test-Path $Exe)) {
     throw "exe not found at $Exe. Build first: cargo xwin build --release --target x86_64-pc-windows-msvc --bin time-tracker"
 }
+# Refuse to package a binary built without --features live-view: the whole app
+# (tray popover + browser surfaces) is the embedded axum server, so a build that
+# doesn't contain the HTTP routes is dead on arrival. Cheap string-scan guard.
+if (-not (Select-String -Path $Exe -Pattern "/api/entries" -SimpleMatch -Quiet)) {
+    throw "exe at $Exe has no '/api/entries' route string - it was almost certainly built WITHOUT --features live-view. Rebuild: cargo xwin build --release --target x86_64-pc-windows-msvc --features live-view --bin time-tracker"
+}
 if (-not (Test-Path $Manifest)) {
     throw "manifest missing: $Manifest"
 }

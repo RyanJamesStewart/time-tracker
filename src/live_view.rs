@@ -169,13 +169,21 @@ pub fn start(
 }
 
 // R3: gate the localhost server. Bind is already `127.0.0.1` (off the LAN),
-// but a *web page* the user visits in any browser can `fetch('http://localhost:17893/...')`
-// (no-CORS / DNS-rebind) and walk away with the CPA's client list, narratives,
-// hours — so reject any request whose `Origin` header is present and isn't our
-// own, and whose `Host` isn't localhost. The app's own pages are same-origin
-// navigations (no `Origin` header on a top-level GET) and the popover WebView2
-// is fine — both pass. No auth token: overkill for a single-user localhost-only
-// tool; the Origin/Host check is the right level. (~20 lines.)
+// but two local-only attack shapes remain: (1) a *web page* the user visits in
+// any browser can `fetch('http://localhost:17893/...')` (no-CORS / DNS-rebind)
+// and walk away with the CPA's client list, narratives, hours; (2) a blind
+// script / scanner / another user on a shared (RDP) box can just `curl
+// http://127.0.0.1:17893/api/entries` while the app is running. So:
+//   - Host must be localhost (kills DNS-rebind);
+//   - if an `Origin` is present it must be ours (kills cross-origin browser fetch);
+//   - every endpoint *except* the page routes / favicons must additionally show
+//     a same-origin `Origin` *or* `Referer` — i.e. proof it was called from one
+//     of our own pages. A top-level page navigation (or the popover WebView2's
+//     initial load) carries neither and doesn't need to; an XHR/fetch/WS from
+//     our pages always carries one.
+// This is not a defense against a *deliberate* same-box attacker — they can read
+// the CSVs directly; that's an OS-isolation problem. It's the right level for a
+// desktop tool: no token plumbing into 4 HTML files, no broken pages.
 async fn localhost_guard(
     req: axum::extract::Request,
     next: axum::middleware::Next,
@@ -185,12 +193,21 @@ async fn localhost_guard(
         let host = h.rsplit_once(':').map(|(a, _)| a).unwrap_or(h);
         matches!(host, "localhost" | "127.0.0.1") || h == "[::1]" || host == "[::1]"
     }
-    fn origin_ok(o: &str) -> bool {
+    fn same_origin(o: &str) -> bool {
         // exact-match our own origins; "null" is what file:// / sandboxed
         // contexts send and is harmless for a read of our own data.
+        matches!(o, "http://localhost:17893" | "http://127.0.0.1:17893" | "null")
+    }
+    fn referer_from_us(r: &str) -> bool {
+        r == "http://localhost:17893"
+            || r == "http://127.0.0.1:17893"
+            || r.starts_with("http://localhost:17893/")
+            || r.starts_with("http://127.0.0.1:17893/")
+    }
+    fn is_page_or_asset(path: &str) -> bool {
         matches!(
-            o,
-            "http://localhost:17893" | "http://127.0.0.1:17893" | "null"
+            path,
+            "/" | "/recorded" | "/export" | "/popover" | "/admin" | "/favicon.ico" | "/favicon.svg"
         )
     }
     let headers = req.headers();
@@ -199,9 +216,22 @@ async fn localhost_guard(
             return (StatusCode::FORBIDDEN, "bad host").into_response();
         }
     }
-    if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
-        if !origin_ok(origin) {
+    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
+    if let Some(o) = origin {
+        if !same_origin(o) {
             return (StatusCode::FORBIDDEN, "cross-origin requests are not allowed").into_response();
+        }
+    }
+    if !is_page_or_asset(req.uri().path()) {
+        let referer = headers.get(header::REFERER).and_then(|v| v.to_str().ok());
+        let from_our_page =
+            origin.map(same_origin).unwrap_or(false) || referer.map(referer_from_us).unwrap_or(false);
+        if !from_our_page {
+            return (
+                StatusCode::FORBIDDEN,
+                "this endpoint is only reachable from the Time Tracker pages",
+            )
+                .into_response();
         }
     }
     next.run(req).await
@@ -579,22 +609,13 @@ use chrono::{
     Datelike, Duration as ChronoDuration, Local, NaiveDate, TimeZone,
 };
 
+use time_tracker::csv_writer::csv_escape;
+use time_tracker::datefmt::{parse_entry_date, parse_hm_dur, MAX_ENTRY_MINUTES};
+
 const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
 const VERSION_COMMENT: &str = "# time-tracker v0.3\r\n";
 const HEADER_V02: &str =
     "date,staff,client,engagement,narrative,minutes,hours_decimal,billable,entry_method,workstream_id\r\n";
-
-/// Parse column 0 of a CSV data row into the entry's calendar date.
-/// v0.3 writes a plain `YYYY-MM-DD`; older files (v0.1/v0.2) wrote an ISO
-/// timestamp — accept those too and take the date part, so a never-edited
-/// legacy file still reads. `None` only if it's genuine garbage.
-fn parse_entry_date(s: &str) -> Option<NaiveDate> {
-    let s = s.trim();
-    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        return Some(d);
-    }
-    chrono::DateTime::parse_from_rfc3339(s).ok().map(|t| t.with_timezone(&Local).date_naive())
-}
 
 /// The `LocatedRow.timestamp` for a given date: local midnight. v0.3 entries
 /// have no clock time; this keeps the range/sort machinery (which works on
@@ -707,14 +728,6 @@ impl CsvFile {
     }
 }
 
-fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
-    }
-}
-
 fn monthly_csv_path(stem: &str) -> PathBuf {
     time_tracker::paths::csv_dir().join(format!("{stem}.csv"))
 }
@@ -742,45 +755,12 @@ fn rewrite_err_response(r: RewriteResult) -> (StatusCode, Json<serde_json::Value
 }
 
 // ---- duration formatting ------------------------------------------------
-
-/// A single entry can't be longer than a full day — multi-session days are
-/// just multiple entries. (The timer itself caps elapsed at 12h elsewhere.)
-const MAX_ENTRY_MINUTES: i64 = 24 * 60;
+// (`parse_hm_dur` and `MAX_ENTRY_MINUTES` now live in `time_tracker::datefmt`
+//  so they're covered by `cargo test --lib`.)
 
 fn fmt_dur(minutes: i64) -> String {
     let m = minutes.max(0);
     format!("{}:{:02}", m / 60, m % 60)
-}
-
-/// Parse a duration the user typed: `"H:MM"` ("1:30"), `"H:M"` ("1:5" → 1:05),
-/// a bare minute count (`"90"`), or `"1.5h"` / `"1.5"` (hours, decimal). Returns
-/// the duration in whole minutes, clamped to `[0, MAX_ENTRY_MINUTES]`. `None`
-/// on genuine garbage.
-fn parse_hm_dur(s: &str) -> Option<i64> {
-    let s = s.trim().trim_end_matches(['h', 'H']).trim();
-    if s.is_empty() {
-        return None;
-    }
-    let mins = if let Some((h_str, m_str)) = s.split_once(':') {
-        let h: i64 = h_str.trim().parse().ok()?;
-        let m: i64 = m_str.trim().parse().ok()?;
-        if !(0..=59).contains(&m) || h < 0 {
-            return None;
-        }
-        h * 60 + m
-    } else if let Ok(m) = s.parse::<i64>() {
-        // a bare integer is taken as minutes
-        m
-    } else if let Ok(hrs) = s.parse::<f64>() {
-        // a decimal is hours ("1.5" = 90m)
-        (hrs * 60.0).round() as i64
-    } else {
-        return None;
-    };
-    if mins < 0 {
-        return None;
-    }
-    Some(mins.min(MAX_ENTRY_MINUTES))
 }
 
 // ---- entry model returned to the pages ----------------------------------
@@ -1209,6 +1189,9 @@ fn apply_patch_fields(row: &mut Vec<String>, ncols: usize, body: &PatchEntryBody
     }
     if let Some(dur_str) = &body.dur {
         let mins = parse_hm_dur(dur_str).ok_or_else(|| "could not parse the duration (try \"1:30\" or \"90\")".to_string())?;
+        if mins == 0 {
+            return Err("duration must be greater than zero".to_string());
+        }
         row[5] = mins.to_string();
         row[6] = format!("{:.2}", (mins as f64) / 60.0);
     }
@@ -1660,11 +1643,13 @@ async fn api_entries_bulk_billable(
         for (i, row) in file.rows.iter().enumerate() {
             let n = i + 1;
             if let Some((from, to)) = window {
-                let d = match chrono::DateTime::parse_from_rfc3339(
-                    row.first().map(String::as_str).unwrap_or(""),
-                ) {
-                    Ok(t) => t.with_timezone(&Local).date_naive(),
-                    Err(_) => continue,
+                // v0.3: column 0 is a plain date — use the shared parser (this
+                // is the bug the `datefmt` consolidation fixes: this site still
+                // parsed an RFC-3339 timestamp, so a ranged bulk-flip silently
+                // matched zero rows after the format change).
+                let d = match parse_entry_date(row.first().map(String::as_str).unwrap_or("")) {
+                    Some(d) => d,
+                    None => continue,
                 };
                 if d < from || d > to {
                     continue;
@@ -2277,19 +2262,54 @@ mod tests {
     #[test]
     fn localhost_guard_logic_accepts_own_origin_rejects_foreign() {
         // (the guard fn itself is async + needs a Request; here we exercise the
-        // pure host/origin predicates it uses, kept inline as nested fns —
-        // re-stated to keep the test independent of internal naming.)
+        // pure host/origin/referer/page-route predicates it uses, re-stated
+        // inline to keep the test independent of internal naming.)
         let host_ok = |h: &str| {
             let host = h.rsplit_once(':').map(|(a, _)| a).unwrap_or(h);
             matches!(host, "localhost" | "127.0.0.1") || h == "[::1]" || host == "[::1]"
         };
-        let origin_ok = |o: &str| matches!(o, "http://localhost:17893" | "http://127.0.0.1:17893" | "null");
+        let same_origin =
+            |o: &str| matches!(o, "http://localhost:17893" | "http://127.0.0.1:17893" | "null");
+        let referer_from_us = |r: &str| {
+            r == "http://localhost:17893"
+                || r == "http://127.0.0.1:17893"
+                || r.starts_with("http://localhost:17893/")
+                || r.starts_with("http://127.0.0.1:17893/")
+        };
+        let is_page_or_asset = |p: &str| {
+            matches!(
+                p,
+                "/" | "/recorded" | "/export" | "/popover" | "/admin" | "/favicon.ico" | "/favicon.svg"
+            )
+        };
+        // host
         assert!(host_ok("localhost:17893"));
         assert!(host_ok("127.0.0.1"));
         assert!(!host_ok("evil.example.com"));
-        assert!(origin_ok("http://localhost:17893"));
-        assert!(origin_ok("null"));
-        assert!(!origin_ok("https://evil.example.com"));
-        assert!(!origin_ok("http://localhost:8080"));
+        // origin
+        assert!(same_origin("http://localhost:17893"));
+        assert!(same_origin("null"));
+        assert!(!same_origin("https://evil.example.com"));
+        assert!(!same_origin("http://localhost:8080"));
+        // referer
+        assert!(referer_from_us("http://localhost:17893/recorded"));
+        assert!(referer_from_us("http://127.0.0.1:17893/popover?ref"));
+        assert!(referer_from_us("http://localhost:17893"));
+        assert!(!referer_from_us("http://evil.example.com/x"));
+        assert!(!referer_from_us("http://localhost:17893.evil.com/"));
+        // page-vs-data routing
+        assert!(is_page_or_asset("/recorded") && is_page_or_asset("/admin") && is_page_or_asset("/"));
+        assert!(!is_page_or_asset("/api/entries") && !is_page_or_asset("/ws") && !is_page_or_asset("/today") && !is_page_or_asset("/workstreams"));
+        // the gate: a data route called with neither Origin nor a same-site Referer is rejected.
+        let allowed = |path: &str, origin: Option<&str>, referer: Option<&str>| {
+            is_page_or_asset(path)
+                || origin.map(&same_origin).unwrap_or(false)
+                || referer.map(&referer_from_us).unwrap_or(false)
+        };
+        assert!(!allowed("/api/entries", None, None), "bare curl to /api/entries must be rejected");
+        assert!(allowed("/api/entries", None, Some("http://localhost:17893/recorded")));
+        assert!(allowed("/api/entries", Some("http://localhost:17893"), None));
+        assert!(allowed("/recorded", None, None), "the page itself loads with no Origin/Referer");
+        assert!(!allowed("/api/entries", None, Some("http://evil.example.com/")));
     }
 }

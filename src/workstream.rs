@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 const STATE_FILE: &str = "workstreams.json";
@@ -110,13 +110,18 @@ impl WorkstreamRegistry {
                     continue;
                 };
                 for fields in csv_data_rows(&content) {
-                    // v0.1 layout: timestamp_iso,staff,client,engagement,narrative,minutes,hours_decimal,billable,entry_method[,workstream_id]
+                    // CSV layout: <date|timestamp_iso>,staff,client,engagement,narrative,minutes,hours_decimal,billable,entry_method[,workstream_id]
                     if fields.len() < 9 {
                         continue;
                     }
-                    let ts = chrono::DateTime::parse_from_rfc3339(&fields[0])
-                        .map(|d| d.with_timezone(&Utc))
-                        .unwrap_or_else(|_| Utc::now());
+                    // v0.3 column 0 is a plain date; v0.1/v0.2 was an ISO
+                    // timestamp. `parse_entry_date` reads both; we only use it
+                    // to order workstreams by recency, so midnight-of-the-date
+                    // (or `now` on garbage) is plenty of precision.
+                    let ts = crate::datefmt::parse_entry_date(&fields[0])
+                        .and_then(|d| d.and_hms_opt(0, 0, 0))
+                        .map(|ndt| Utc.from_utc_datetime(&ndt))
+                        .unwrap_or_else(Utc::now);
                     let client = fields[2].trim().to_string();
                     let engagement = fields[3].trim().to_string();
                     if client.is_empty() {

@@ -273,6 +273,7 @@
   @keyframes pv-blink { 0%,100%{opacity:1} 50%{opacity:.4} }
   @keyframes pv-pop { from{opacity:0; transform:translateY(8px) scale(.985)} to{opacity:1; transform:none} }
   .pv.enter { animation: pv-pop 240ms cubic-bezier(.16,.84,.32,1); }
+  [data-act]:focus-visible, [tabindex="0"]:focus-visible, button:focus-visible, input:focus-visible { outline:2px solid var(--signal); outline-offset:2px; border-radius:5px; }
   @media (prefers-reduced-motion: reduce) { *,*::before,*::after{animation-duration:.001s !important; transition-duration:.001s !important} }
 </style>
 </head>
@@ -567,7 +568,7 @@ function switcherRow(w, i) {
     <div class="gutter">${gutter}</div>
     <div class="body">
       <div class="cl">${esc(w.client)}</div>
-      <div class="en">${esc(w.engagement)}${w.billable === false ? ' <span class="int">· internal</span>' : ''}</div>
+      <div class="en">${esc(w.engagement)}${w.billable === false ? ' <span class="int">· non-billable</span>' : ''}</div>
     </div>
     <div class="rc">${esc(rc)}</div>
   </div>`;
@@ -1081,6 +1082,10 @@ function scheduleWs() { clearTimeout(wsTimer); wsTimer = setTimeout(connectWs, 1
 function wire() {
   const root = $root();
   root.querySelectorAll('[data-act]').forEach(el => {
+    // a11y: icon-only controls get an aria-label from their title. (Tab/arrow
+    // keyboard nav for the switcher is handled globally; the popover's other
+    // controls are real <button>s, so no tabindex injection needed here.)
+    if (el.title && !el.getAttribute('aria-label')) el.setAttribute('aria-label', el.title);
     el.addEventListener('click', (ev) => {
       ev.preventDefault(); ev.stopPropagation();
       const act = el.dataset.act;
