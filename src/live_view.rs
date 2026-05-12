@@ -1184,9 +1184,9 @@ async fn api_entries_list(Query(q): Query<EntriesQuery>) -> impl IntoResponse {
 
 #[derive(serde::Deserialize)]
 struct PatchEntryBody {
-    /// New date `YYYY-MM-DD`. Must stay in the same month (a cross-month move
-    /// would have to relocate the row to another monthly file — delete + re-add
-    /// for that). `dur` here is what the user typed: "1:30", "90", "1.5", …
+    /// New date `YYYY-MM-DD`. If it lands in a different month than the entry's
+    /// current monthly file, the entry is *moved* there (delete from the old
+    /// file, append to the new). `dur` is what the user typed: "1:30", "90", …
     date: Option<String>,
     dur: Option<String>,
     client: Option<String>,
@@ -1195,26 +1195,16 @@ struct PatchEntryBody {
     billable: Option<bool>,
 }
 
-/// Apply a PATCH to one row, in place. `stem` is the monthly-file stem the row
-/// lives in (used to reject cross-month date edits). Returns Err with a human
-/// message (used both for pre-validation and inside the rewrite transform).
-fn apply_patch_to_row(file: &mut CsvFile, stem: &str, n: usize, body: &PatchEntryBody) -> Result<(), String> {
-    if n == 0 || n > file.rows.len() {
-        return Err("no such entry".to_string());
-    }
-    let ncols = file.ncols();
-    let row = &mut file.rows[n - 1];
+/// Apply the body's field updates to a CSV row in place (the row is first
+/// padded to ncols). Validates the date format and the duration. Does NOT
+/// check whether the date stays in the same month — the caller decides.
+fn apply_patch_fields(row: &mut Vec<String>, ncols: usize, body: &PatchEntryBody) -> Result<(), String> {
     while row.len() < ncols {
         row.push(String::new());
     }
-
     if let Some(d_str) = &body.date {
         let d = NaiveDate::parse_from_str(d_str.trim(), "%Y-%m-%d")
             .map_err(|_| "could not parse the date (want YYYY-MM-DD)".to_string())?;
-        let row_stem = format!("{:04}-{:02}", d.year(), d.month());
-        if row_stem != stem {
-            return Err("can't move an entry to a different month here — delete it and add it again".to_string());
-        }
         row[0] = d.format("%Y-%m-%d").to_string();
     }
     if let Some(dur_str) = &body.dur {
@@ -1237,6 +1227,30 @@ fn apply_patch_to_row(file: &mut CsvFile, stem: &str, n: usize, body: &PatchEntr
     Ok(())
 }
 
+/// Apply a PATCH to one row of an in-memory `CsvFile`, in place. Used for
+/// same-month edits (the cross-month move path goes through `move_entry_to_month`).
+fn apply_patch_to_row(file: &mut CsvFile, n: usize, body: &PatchEntryBody) -> Result<(), String> {
+    if n == 0 || n > file.rows.len() {
+        return Err("no such entry".to_string());
+    }
+    let ncols = file.ncols();
+    apply_patch_fields(&mut file.rows[n - 1], ncols, body)
+}
+
+/// The month-stem (e.g. `"2026-06"`) the patched entry would live in, if `body`
+/// changes the date *and* that pushes it into a different month than `cur_stem`.
+/// `Err` if the date string is malformed (so the caller can 422 cleanly).
+fn patch_target_stem(cur_stem: &str, body: &PatchEntryBody) -> Result<Option<String>, ()> {
+    match &body.date {
+        Some(d_str) => {
+            let d = NaiveDate::parse_from_str(d_str.trim(), "%Y-%m-%d").map_err(|_| ())?;
+            let s = format!("{:04}-{:02}", d.year(), d.month());
+            Ok(if s != cur_stem { Some(s) } else { None })
+        }
+        None => Ok(None),
+    }
+}
+
 async fn api_entries_patch(
     State(state): State<AppState>,
     AxPath(id): AxPath<String>,
@@ -1252,11 +1266,20 @@ async fn api_entries_patch(
             "this entry is locked — it's included in a completed export. Unlock it first.",
         );
     }
+
+    // A date change that crosses months means *moving* the row to another
+    // monthly file — handle that separately.
+    match patch_target_stem(&stem, &body) {
+        Ok(Some(dest_stem)) => return move_entry_to_month(state, &stem, n, &dest_stem, body).await,
+        Ok(None) => {}
+        Err(()) => return err_json(StatusCode::UNPROCESSABLE_ENTITY, "could not parse the date (want YYYY-MM-DD)"),
+    }
+
     // Pre-validate against the current on-disk state for a friendly status
     // code; the authoritative read-modify-write happens on the writer thread.
     match read_csv_file(&stem) {
         Some(mut f) => {
-            if let Err(msg) = apply_patch_to_row(&mut f, &stem, n, &body) {
+            if let Err(msg) = apply_patch_to_row(&mut f, n, &body) {
                 let status = if msg == "no such entry" {
                     StatusCode::NOT_FOUND
                 } else {
@@ -1271,13 +1294,12 @@ async fn api_entries_patch(
         None => {}
     }
     let stem_for_tx = stem.clone();
-    let stem_for_closure = stem.clone();
     let result = state.csv_writer.rewrite_blocking(
         &stem,
         Box::new(move |cur| {
             let bytes = cur.ok_or_else(|| "no CSV file for that entry".to_string())?;
             let mut file = CsvFile::parse(&String::from_utf8_lossy(bytes));
-            apply_patch_to_row(&mut file, &stem_for_closure, n, &body)?;
+            apply_patch_to_row(&mut file, n, &body)?;
             Ok(file.render())
         }),
     );
@@ -1293,6 +1315,102 @@ async fn api_entries_patch(
             }
         }
         other => rewrite_err_response(other),
+    }
+}
+
+/// Move an entry from `src_stem`'s monthly CSV to `dest_stem`'s, applying any
+/// other patched fields on the way. Two serialized rewrites on the writer
+/// thread: (1) append the (patched) row to the destination month, then
+/// (2) remove the original from the source month. If (2) fails after (1)
+/// landed, the entry exists in both months — visible & recoverable; we say so.
+async fn move_entry_to_month(
+    state: AppState,
+    src_stem: &str,
+    n: usize,
+    dest_stem: &str,
+    body: PatchEntryBody,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // Read the source row, apply the patch fields to a clone.
+    let src = match read_csv_file(src_stem) {
+        Some(f) => f,
+        None => return err_json(StatusCode::NOT_FOUND, "no CSV file for that entry"),
+    };
+    if n == 0 || n > src.rows.len() {
+        return err_json(StatusCode::NOT_FOUND, "no such entry");
+    }
+    let mut moved = src.rows[n - 1].clone();
+    if let Err(msg) = apply_patch_fields(&mut moved, src.ncols(), &body) {
+        return err_json(StatusCode::UNPROCESSABLE_ENTITY, msg);
+    }
+
+    // (1) append the moved row to the destination month.
+    let moved_for_dest = moved.clone();
+    let append_res = state.csv_writer.rewrite_blocking(
+        dest_stem,
+        Box::new(move |cur| {
+            let mut file = match cur {
+                Some(bytes) => CsvFile::parse(&String::from_utf8_lossy(bytes)),
+                None => CsvFile::fresh_v02(),
+            };
+            let mut row = moved_for_dest;
+            let ncols = file.ncols();
+            row.truncate(ncols);
+            while row.len() < ncols {
+                row.push(String::new());
+            }
+            file.rows.push(row);
+            Ok(file.render())
+        }),
+    );
+    if !matches!(append_res, RewriteResult::Written) {
+        return rewrite_err_response(append_res);
+    }
+
+    // (2) remove the original row from the source month.
+    let src_n = n;
+    let del_res = state.csv_writer.rewrite_blocking(
+        src_stem,
+        Box::new(move |cur| {
+            let bytes = cur.ok_or_else(|| "no CSV file for that entry".to_string())?;
+            let mut file = CsvFile::parse(&String::from_utf8_lossy(bytes));
+            if src_n == 0 || src_n > file.rows.len() {
+                return Err("no such entry".to_string());
+            }
+            file.rows.remove(src_n - 1);
+            Ok(file.render())
+        }),
+    );
+    if !matches!(del_res, RewriteResult::Written) {
+        let detail = match &del_res {
+            RewriteResult::Locked(m) | RewriteResult::Error(m) => format!(" ({m})"),
+            _ => String::new(),
+        };
+        return err_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("the entry was copied into {dest_stem}, but couldn't be removed from {src_stem} — close any program holding that month's CSV, then delete the leftover copy{detail}"),
+        );
+    }
+
+    // The source delete shifted later rows' positional ids — re-point the
+    // export lock manifest (same as DELETE).
+    let mut manifest = ExportManifest::load();
+    if manifest.shift_after_delete(src_stem, n) {
+        if let Err(e) = manifest.save() {
+            tracing::error!(error = %e, src_stem, dest_stem, n,
+                "PATCH(move): entry moved but export lock manifest shift failed to persist — lock ids in {src_stem} are now off-by-one");
+        }
+    }
+
+    // Return the moved entry (now the last row in the destination file).
+    let manifest = ExportManifest::load();
+    let dest = dest_stem.to_string();
+    let moved_api = read_csv_file(&dest).and_then(|f| {
+        let m = f.rows.len();
+        locate_rows(&dest, &f).into_iter().find(|r| r.n == m)
+    });
+    match moved_api.map(|r| r.to_api(&manifest)) {
+        Some(e) => (StatusCode::OK, Json(serde_json::to_value(e).unwrap())),
+        None => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))),
     }
 }
 
