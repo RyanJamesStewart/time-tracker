@@ -24,6 +24,27 @@ use serde::{Deserialize, Serialize};
 const STATE_FILE: &str = "timer-state.json";
 const SANITY_CAP_MINUTES: u32 = 12 * 60;
 
+/// Continuation-reminder thresholds (minutes since the current window's
+/// base). At REMIND we surface a non-invasive toast asking the user to
+/// confirm the timer is still legit; if they don't answer, at AUTOSTOP we
+/// stop the timer and log the entry so a forgotten/overnight timer can't
+/// run away. "Keep going" re-bases the window so the next prompt is
+/// REMIND_AFTER_MIN later again.
+pub const REMIND_AFTER_MIN: i64 = 4 * 60;
+pub const AUTOSTOP_AFTER_MIN: i64 = 5 * 60;
+
+/// What the 30s tick should do about the running timer's continuation
+/// window. `Ok` covers both "too early to ask" and "already asked, still
+/// inside the 1h grace".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinuationState {
+    Ok,
+    /// >= 4h since the window base and we haven't toasted yet.
+    RemindDue,
+    /// >= 5h since the window base with no "keep going" — stop + log.
+    AutoStopDue,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunningTimer {
     pub client: String,
@@ -31,6 +52,15 @@ pub struct RunningTimer {
     pub narrative: String,
     pub billable: bool,
     pub started_at: DateTime<Local>,
+    /// When the continuation window was last re-armed by the user pressing
+    /// "Keep going". `None` => measure from `started_at`. `#[serde(default)]`
+    /// so timer-state.json files written by older builds still load.
+    #[serde(default)]
+    pub reminder_base: Option<DateTime<Local>>,
+    /// The toast for the *current* window has already been shown — don't
+    /// re-toast on every 30s tick during the 1h grace.
+    #[serde(default)]
+    pub reminded: bool,
 }
 
 impl RunningTimer {
@@ -42,6 +72,24 @@ impl RunningTimer {
         let raw = (now - self.started_at).num_minutes().max(0) as u32;
         let exceeds_cap = raw > SANITY_CAP_MINUTES;
         (raw.min(SANITY_CAP_MINUTES), exceeds_cap)
+    }
+
+    /// Start of the active continuation window: the last "Keep going", or
+    /// the original start if it's never been confirmed.
+    fn window_base(&self) -> DateTime<Local> {
+        self.reminder_base.unwrap_or(self.started_at)
+    }
+
+    /// Where this timer sits in its continuation window right now.
+    pub fn continuation_state(&self) -> ContinuationState {
+        let mins = (Local::now() - self.window_base()).num_minutes().max(0);
+        if mins >= AUTOSTOP_AFTER_MIN {
+            ContinuationState::AutoStopDue
+        } else if mins >= REMIND_AFTER_MIN && !self.reminded {
+            ContinuationState::RemindDue
+        } else {
+            ContinuationState::Ok
+        }
     }
 }
 
@@ -91,9 +139,37 @@ impl Timer {
             narrative,
             billable,
             started_at: Local::now(),
+            reminder_base: None,
+            reminded: false,
         });
         let _ = self.persist();
         Ok(())
+    }
+
+    /// Continuation state of the running timer, or `None` if idle.
+    pub fn continuation_state(&self) -> Option<ContinuationState> {
+        self.current.as_ref().map(RunningTimer::continuation_state)
+    }
+
+    /// Record that the continuation toast has been shown for the current
+    /// window so the next ticks don't re-toast. Persisted so a restart
+    /// during the 1h grace doesn't re-prompt.
+    pub fn mark_reminded(&mut self) {
+        if let Some(rt) = self.current.as_mut() {
+            rt.reminded = true;
+            let _ = self.persist();
+        }
+    }
+
+    /// User pressed "Keep going": re-base the continuation window to now
+    /// and clear the reminded flag so the next prompt is REMIND_AFTER_MIN
+    /// out again.
+    pub fn ack_continue(&mut self) {
+        if let Some(rt) = self.current.as_mut() {
+            rt.reminder_base = Some(Local::now());
+            rt.reminded = false;
+            let _ = self.persist();
+        }
     }
 
     /// Stop and return the timer (so the caller can write an Entry).
@@ -197,15 +273,22 @@ mod tests {
         assert!(t.stop().is_none());
     }
 
-    #[test]
-    fn elapsed_under_cap_returns_unflagged() {
-        let rt = RunningTimer {
+    /// A RunningTimer started `ago` in the past, never confirmed.
+    fn rt_started(ago: CDuration) -> RunningTimer {
+        RunningTimer {
             client: "A".into(),
             engagement: "".into(),
             narrative: "x".into(),
             billable: true,
-            started_at: Local::now() - CDuration::minutes(30),
-        };
+            started_at: Local::now() - ago,
+            reminder_base: None,
+            reminded: false,
+        }
+    }
+
+    #[test]
+    fn elapsed_under_cap_returns_unflagged() {
+        let rt = rt_started(CDuration::minutes(30));
         let (mins, exceeded) = rt.elapsed_minutes();
         assert!(mins >= 29 && mins <= 31, "expected ~30, got {mins}");
         assert!(!exceeded);
@@ -213,15 +296,55 @@ mod tests {
 
     #[test]
     fn elapsed_over_12h_caps_and_flags() {
-        let rt = RunningTimer {
-            client: "A".into(),
-            engagement: "".into(),
-            narrative: "overnight".into(),
-            billable: true,
-            started_at: Local::now() - CDuration::hours(15),
-        };
+        let rt = rt_started(CDuration::hours(15));
         let (mins, exceeded) = rt.elapsed_minutes();
         assert_eq!(mins, SANITY_CAP_MINUTES);
         assert!(exceeded);
+    }
+
+    #[test]
+    fn continuation_ok_before_4h() {
+        assert_eq!(
+            rt_started(CDuration::hours(3)).continuation_state(),
+            ContinuationState::Ok
+        );
+    }
+
+    #[test]
+    fn continuation_remind_due_at_4h_then_silenced() {
+        let mut rt = rt_started(CDuration::minutes(REMIND_AFTER_MIN + 5));
+        assert_eq!(rt.continuation_state(), ContinuationState::RemindDue);
+        // Once toasted, we stay Ok through the 1h grace (not re-prompting).
+        rt.reminded = true;
+        assert_eq!(rt.continuation_state(), ContinuationState::Ok);
+    }
+
+    #[test]
+    fn continuation_autostop_at_5h_even_if_reminded() {
+        let mut rt = rt_started(CDuration::minutes(AUTOSTOP_AFTER_MIN + 1));
+        rt.reminded = true;
+        assert_eq!(rt.continuation_state(), ContinuationState::AutoStopDue);
+    }
+
+    #[test]
+    fn ack_continue_rebases_window() {
+        let mut t = Timer::default();
+        t.start("C".into(), "E".into(), "".into(), true).unwrap();
+        // Force the running timer to look 4.5h old.
+        t.current.as_mut().unwrap().started_at =
+            Local::now() - CDuration::minutes(REMIND_AFTER_MIN + 30);
+        assert_eq!(
+            t.continuation_state(),
+            Some(ContinuationState::RemindDue)
+        );
+        t.ack_continue();
+        // Re-based to now → back to Ok, reminded cleared.
+        assert_eq!(t.continuation_state(), Some(ContinuationState::Ok));
+        assert!(!t.current.as_ref().unwrap().reminded);
+    }
+
+    #[test]
+    fn idle_timer_has_no_continuation_state() {
+        assert_eq!(Timer::default().continuation_state(), None);
     }
 }

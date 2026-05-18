@@ -460,7 +460,9 @@ async function loadWorkstreams() {
     S.runningIdx = i; if (i < 0) { S.base = 'idle'; }
   } else { S.runningIdx = -1; }
   S.selectedIdx = S.runningIdx >= 0 ? S.runningIdx : 0;
-  if (S.emptyMode == null) render();
+  // never repaint over the add form — it owns the whole surface while open,
+  // and a destructive rebuild here reverts whatever's being typed.
+  if (S.emptyMode == null && !S.adding) render();
 }
 
 /* GET /today → replace the day's entries + the live timer total. Silently keeps
@@ -488,7 +490,7 @@ async function loadToday() {
       ? { client: data.running.client || '—', engagement: data.running.engagement || '', narrative: data.running.narrative || '', minutes: mins(data.running.minutes) }
       : null,
   };
-  if (S.tab === 'today' && !qp().has('ref')) render();
+  if (S.tab === 'today' && !qp().has('ref') && !S.adding) render();
 }
 
 /* POST /timer/{start,stop,switch}. Fire-and-forget — the authoritative state
@@ -673,25 +675,44 @@ function addMatchList() {
   }
   return [];
 }
+/* The suggestion dropdown for the active stage. Split out of addForm() so the
+   per-keystroke path can refresh ONLY this markup in place (refreshAddDrop())
+   without tearing down — and re-creating — the <input> the user is typing in.
+   Rebuilding the input on every character was what made the caret "fly back
+   to the Client field" and revert typed text. Returns '' off-stage. */
+function addDropMarkup() {
+  const st = S.addStage;
+  if (st !== 'client' && st !== 'engagement') { S.addSel = Math.max(0, S.addSel | 0); return ''; }
+  const matches = addMatchList();
+  // clamp the highlight: 0..matches.length, where matches.length is the "+ New …" row
+  const sel = Math.max(0, Math.min(S.addSel | 0, matches.length));
+  S.addSel = sel;
+  if (st === 'client') {
+    return `<div class="pv-fdrop">
+      ${matches.map((c,i) => `<div class="it${i===sel?' active':''}" data-act="pick-client" data-v="${esc(c)}"><span class="nm">${esc(c)}</span></div>`).join('')}
+      <div class="new${sel===matches.length?' active':''}" data-act="pick-client" data-v="${esc(S.addClient.trim())}">${'<span class="pv-mono" style="color:var(--ink-4)">+</span>'} New client${S.addClient.trim()?` “${esc(S.addClient.trim())}”`:''}…</div>
+    </div>`;
+  }
+  return `<div class="pv-fdrop">
+      ${matches.length ? matches.map((e,i) => `<div class="it${i===sel?' active':''}" data-act="pick-eng" data-v="${esc(e)}"><span class="nm">${esc(e)}</span></div>`).join('') : `<div class="it muted"><span class="nm">No engagements yet for this client</span></div>`}
+      <div class="new${sel===matches.length?' active':''}" data-act="pick-eng" data-v="${esc(S.addEngagement.trim())}">${'<span class="pv-mono" style="color:var(--ink-4)">+</span>'} New engagement${S.addEngagement.trim()?` “${esc(S.addEngagement.trim())}”`:''}…</div>
+    </div>`;
+}
+/* In-place refresh of just the active stage's dropdown — used by the
+   per-keystroke / arrow-key paths so the live <input> (and its caret) is
+   never destroyed. Falls back to a full render() only if the wrap is gone. */
+function refreshAddDrop() {
+  const wrap = document.getElementById(S.addStage === 'engagement' ? 'pv-edrop' : 'pv-cdrop');
+  if (!wrap) { render(); return; }
+  wrap.innerHTML = addDropMarkup();
+}
 function addForm() {
   const st = S.addStage;
   const clientFocus = st === 'client';
   const engFocus = st === 'engagement';
   const engDisabled = !S.addClient.trim();
-  const matches = (clientFocus || engFocus) ? addMatchList() : [];
-  // clamp the highlight: 0..matches.length, where matches.length is the "+ New …" row
-  const sel = Math.max(0, Math.min(S.addSel | 0, matches.length));
-  S.addSel = sel;
-  const clientMatches = clientFocus ? matches : [];
-  const engMatches = engFocus ? matches : [];
-  const clientDrop = clientFocus ? `<div class="pv-fdrop">
-      ${clientMatches.map((c,i) => `<div class="it${i===sel?' active':''}" data-act="pick-client" data-v="${esc(c)}"><span class="nm">${esc(c)}</span></div>`).join('')}
-      <div class="new${sel===matches.length?' active':''}" data-act="pick-client" data-v="${esc(S.addClient.trim())}">${'<span class="pv-mono" style="color:var(--ink-4)">+</span>'} New client${S.addClient.trim()?` “${esc(S.addClient.trim())}”`:''}…</div>
-    </div>` : '';
-  const engDrop = engFocus ? `<div class="pv-fdrop">
-      ${engMatches.length ? engMatches.map((e,i) => `<div class="it${i===sel?' active':''}" data-act="pick-eng" data-v="${esc(e)}"><span class="nm">${esc(e)}</span></div>`).join('') : `<div class="it muted"><span class="nm">No engagements yet for this client</span></div>`}
-      <div class="new${sel===matches.length?' active':''}" data-act="pick-eng" data-v="${esc(S.addEngagement.trim())}">${'<span class="pv-mono" style="color:var(--ink-4)">+</span>'} New engagement${S.addEngagement.trim()?` “${esc(S.addEngagement.trim())}”`:''}…</div>
-    </div>` : '';
+  const clientDrop = clientFocus ? `<div id="pv-cdrop">${addDropMarkup()}</div>` : '<div id="pv-cdrop"></div>';
+  const engDrop = engFocus ? `<div id="pv-edrop">${addDropMarkup()}</div>` : '<div id="pv-edrop"></div>';
   return `<div class="pv-add">
     <div class="pv-add-head">${combo(['Ctrl','Shift','H'])}<span class="pv-lbl" style="color:var(--signal-ink)">add workstream</span><span class="sp"></span><span class="next">${combo(['Tab'],true)} next field</span></div>
     <div class="pv-field">
@@ -1023,38 +1044,42 @@ function findOrAddWorkstream(client, engagement, billable) {
   if (i < 0) { S.list.unshift({ client, engagement, billable: billable !== false, pinned:false, lastUsed:'now' }); i = 0; if (S.runningIdx >= 0) S.runningIdx += 1; }
   return i;
 }
+// State still mutates on a WS event while the add form is open, but the
+// destructive full repaint is deferred — submitAdd()/cancelAdd() render on
+// exit, so the new state shows then without nuking what's being typed.
+function wsRender() { if (!S.adding) render(); }
 function handleWs(m) {
   if (!m || typeof m !== 'object') return;
   switch (m.event) {
-    case 'connected': S.connected = true; render(); break;
+    case 'connected': S.connected = true; wsRender(); break;
     case 'timer_started': {
       const i = findOrAddWorkstream(m.client || '(no client)', m.engagement || '', true);
       S.base = 'running'; S.runningIdx = i; S.selectedIdx = i;
       S.timerStart = m.at ? (Date.parse(m.at) || Date.now()) : Date.now();
       S.note = m.narrative || '';
       S.emptyMode = null;
-      cancelSwitchToast(); render(); loadToday(); break;
+      cancelSwitchToast(); wsRender(); loadToday(); break;
     }
     case 'timer_stopped': {
       if (S.runningIdx >= 0) S.list[S.runningIdx] = { ...S.list[S.runningIdx], lastUsed:'just now' };
-      S.base = 'idle'; S.runningIdx = -1; cancelSwitchToast(); render(); loadToday(); break;
+      S.base = 'idle'; S.runningIdx = -1; cancelSwitchToast(); wsRender(); loadToday(); break;
     }
     case 'entry_logged': {
       const i = S.list.findIndex(w => w.client === m.client);
       if (i >= 0) S.list[i] = { ...S.list[i], lastUsed:'just now' };
-      render(); loadToday(); break;
+      wsRender(); loadToday(); break;
     }
     case 'workstream_switched': {
       // arrives after the timer_stopped / entry_logged / timer_started trio —
       // we're already on the new workstream; just run the "switched · dismissing"
       // countdown so the popover gets out of the way.
-      startSwitchToast(); render(); break;
+      startSwitchToast(); wsRender(); break;
     }
     case 'hotkey': {
       // desktop hotkey fired while the popover is up — mirror it locally.
       if (m.which === 'add_workstream') { openAddForm(false); }   // popover already visible → not "from closed"
       else if (m.which === 'open_search') { openFind(false); }    // Ctrl+Shift+' fired while we're up → drop into filter-mode
-      else if (m.which === 'popover_toggle') { if (!qp().has('ref')) { popEntry = true; render(); } }   // re-pop the entry animation
+      else if (m.which === 'popover_toggle') { if (!qp().has('ref') && !S.adding) { popEntry = true; render(); } }   // re-pop the entry animation
       else if (m.which === 'timer_stop') { /* timer_stopped will follow */ }
       break;
     }
@@ -1124,17 +1149,17 @@ function wire() {
       inp.addEventListener('input', () => {
         readAddFields();
         S.addSel = 0;   // the suggestion list just changed — re-highlight the top
-        render();
+        refreshAddDrop();   // patch ONLY the dropdown — never rebuild the live input
       });
       inp.addEventListener('keydown', (e) => {
         if (e.key === 'ArrowDown') {
           e.preventDefault(); readAddFields();
-          S.addSel = (S.addSel | 0) + 1;   // addForm() clamps to the "+ New …" row
-          render();
+          S.addSel = (S.addSel | 0) + 1;   // addDropMarkup() clamps to the "+ New …" row
+          refreshAddDrop();
         } else if (e.key === 'ArrowUp') {
           e.preventDefault(); readAddFields();
           S.addSel = Math.max(0, (S.addSel | 0) - 1);
-          render();
+          refreshAddDrop();
         } else if (e.key === 'Enter') {
           e.preventDefault(); readAddFields();
           const m = addMatchList(), sel = S.addSel | 0;

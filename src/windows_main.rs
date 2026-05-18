@@ -38,6 +38,10 @@ use time_tracker::{
 #[path = "popup.rs"]
 mod popup;
 
+// v0.3.1: Windows toast for the 4h continuation reminder. See src/notify.rs.
+#[path = "notify.rs"]
+mod notify;
+
 // Optional localhost HTTP+WebSocket "live view" — compiled only with the
 // `live-view` Cargo feature. See src/live_view.rs.
 #[cfg(feature = "live-view")]
@@ -76,8 +80,13 @@ enum UserMessage {
     ShowTimerStop,
     /// SPEC §3.2: 30s timer-tick persistence wake. Posted by a
     /// dedicated sleep thread (see `spawn_timer_tick_thread`). Not a
-    /// popup-show mode.
+    /// popup-show mode. Also drives the v0.3.1 continuation reminder.
     TimerTick,
+    /// v0.3.1: the user pressed a button on the 4h continuation toast.
+    /// Posted from the toast's in-process `Activated` handler via the
+    /// EventLoopProxy so the Timer mutation happens on the owning thread.
+    ContinuationKeepGoing,
+    ContinuationStop,
     /// v0.3: timer commands from the popover (POST /timer/start|stop|switch).
     /// The HTTP handler validates the workstream id against the registry,
     /// then posts one of these so the actual timer mutation + CSV write +
@@ -516,6 +525,13 @@ pub fn run() {
 
     let popup_window_id = popup.window_id();
 
+    // v0.3.1: tag the process with an AUMID so unpackaged builds can raise
+    // the continuation toast (no-op under MSIX — package identity wins).
+    notify::set_app_user_model_id();
+    // Proxy the toast's Activated handler uses to marshal the user's choice
+    // back onto this (Timer-owning) thread.
+    let toast_proxy = proxy.clone();
+
     // `usage` is Arc<Usage>; clone for the closure so the outer `usage`
     // remains usable for `usage.app_exit()` after the loop returns.
     let usage_loop = usage.clone();
@@ -549,7 +565,45 @@ pub fn run() {
                 UserMessage::ShowQuickEntry => popup.show(PopupMode::QuickEntry, "ipc"),
                 UserMessage::ShowTimerStart => popup.show(PopupMode::TimerStart, "ipc"),
                 UserMessage::ShowTimerStop => popup.show(PopupMode::TimerStop, "ipc"),
-                UserMessage::TimerTick => popup.tick_persist(),
+                UserMessage::TimerTick => {
+                    popup.tick_persist();
+                    // v0.3.1 continuation reminder. The 5h auto-stop fires
+                    // here regardless of whether the 4h toast displayed, so
+                    // a forgotten/overnight timer can't run away even with
+                    // notifications disabled.
+                    match popup.continuation_state() {
+                        Some(timer::ContinuationState::RemindDue) => {
+                            if let Some(r) = popup.running_summary() {
+                                let p = toast_proxy.clone();
+                                notify::show_continuation_reminder(
+                                    &r.0,
+                                    &r.1,
+                                    move |action| {
+                                        let _ = p.send_event(match action {
+                                            notify::ToastAction::KeepGoing => {
+                                                UserMessage::ContinuationKeepGoing
+                                            }
+                                            notify::ToastAction::Stop => {
+                                                UserMessage::ContinuationStop
+                                            }
+                                        });
+                                    },
+                                );
+                            }
+                            // Mark shown even if the toast failed — we don't
+                            // want to retry every 30s; the 5h cap still runs.
+                            popup.mark_reminded();
+                        }
+                        Some(timer::ContinuationState::AutoStopDue) => {
+                            popup.stop_running_and_log("continuation-timeout");
+                        }
+                        _ => {}
+                    }
+                }
+                UserMessage::ContinuationKeepGoing => popup.ack_continue(),
+                UserMessage::ContinuationStop => {
+                    popup.stop_running_and_log("continuation-declined")
+                }
                 #[cfg(feature = "live-view")]
                 UserMessage::TimerCmdStart { client, engagement, billable } => {
                     popup.cmd_timer_start(client, engagement, *billable);

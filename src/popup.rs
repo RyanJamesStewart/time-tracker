@@ -276,8 +276,20 @@ impl Popup {
     /// error the timer is left running so elapsed time isn't lost.
     #[cfg(feature = "live-view")]
     pub fn cmd_timer_stop(&mut self) {
+        self.stop_running_and_log("popover");
+    }
+
+    /// Stop the running timer + write its Entry, exactly like the popover's
+    /// stop. Not feature-gated so the continuation-reminder auto-stop works
+    /// in the tray-only build too (the `live_bus.*` calls are no-ops without
+    /// the `live-view` feature). `reason` is for the log line only — the
+    /// elapsed minutes are the raw value (capped at the 12h sanity bound),
+    /// so the user's "log capped at 5h" choice falls out naturally: at the
+    /// 5h auto-stop the entry is ~300 minutes. No-op if idle; on a CSV
+    /// error the timer is left running so elapsed time isn't lost.
+    pub fn stop_running_and_log(&mut self, reason: &'static str) {
         let Some(running) = self.timer.peek().cloned() else {
-            tracing::info!("cmd_timer_stop: no timer running — no-op");
+            tracing::info!(reason, "stop_running_and_log: no timer running — no-op");
             return;
         };
         let minutes = running.elapsed_minutes().0.max(1);
@@ -310,18 +322,45 @@ impl Popup {
                     "timer",
                 );
                 self.usage.entry_written("timer", minutes, running.billable);
-                tracing::info!(client = %running.client, minutes, "timer stopped via popover");
+                tracing::info!(client = %running.client, minutes, reason, "timer stopped");
             }
             csv_writer::WriteResult::Queued => {
                 let _ = self.timer.stop();
                 self.live_bus.timer_stopped(&running.client, i64::from(minutes));
                 self.usage.entry_queued("csv_locked");
-                tracing::info!(client = %running.client, minutes, "timer stopped via popover (entry queued)");
+                tracing::info!(client = %running.client, minutes, reason, "timer stopped (entry queued)");
             }
             csv_writer::WriteResult::Error(msg) => {
-                tracing::error!(error = %msg, "cmd_timer_stop: CSV write failed — timer left running");
+                tracing::error!(error = %msg, reason, "stop_running_and_log: CSV write failed — timer left running");
             }
         }
+    }
+
+    // ---- v0.3.1: continuation-reminder bridge ---------------------------
+    // Thin delegators to the owned Timer so windows_main's 30s tick can
+    // drive the 4h prompt / 5h auto-stop without reaching into `timer`.
+
+    /// Continuation state of the running timer (None when idle).
+    pub fn continuation_state(&self) -> Option<timer::ContinuationState> {
+        self.timer.continuation_state()
+    }
+
+    /// (client, engagement) of the running timer, for the toast text.
+    pub fn running_summary(&self) -> Option<(String, String)> {
+        self.timer
+            .peek()
+            .map(|r| (r.client.clone(), r.engagement.clone()))
+    }
+
+    /// The continuation toast was shown — don't re-toast during the grace.
+    pub fn mark_reminded(&mut self) {
+        self.timer.mark_reminded();
+    }
+
+    /// User chose "Keep going" — re-arm the window for another 4h.
+    pub fn ack_continue(&mut self) {
+        self.timer.ack_continue();
+        tracing::info!("continuation: user confirmed — window re-armed");
     }
 
     /// POST /timer/switch: stop the current timer (writing its entry), then
